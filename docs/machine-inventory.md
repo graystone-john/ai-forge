@@ -283,3 +283,10 @@ The general rule is:
 
 Do not manually edit generated or deployed configuration when the corresponding
 setting can be represented in the Git-managed source configuration.
+
+## Provisioning Workflow
+
+The operational boot, Wake-on-LAN, one-time PXE, SSH, and reprovisioning
+workflow is documented in:
+
+    docs/provisioning-workflow.md

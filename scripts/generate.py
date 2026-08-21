@@ -42,7 +42,6 @@ def main():
         encoding="utf-8"
     ).strip()
 
-
     profiles = {}
     for profile_name in machine.get("profiles", []):
         profiles[profile_name] = load_yaml(
@@ -60,7 +59,7 @@ def main():
         "username": forge["defaults"]["username"],
         "password_hash": secrets["password_hash"],
         "os_disk_serial": machine["hardware"]["os_disk"]["udev_serial"],
-	"ssh_authorized_key": ssh_authorized_key,
+        "ssh_authorized_key": ssh_authorized_key,
     }
 
     env = Environment(
@@ -125,22 +124,11 @@ def main():
             machine_http / "meta-data",
         )
 
-        # Never change an existing machine's mode during deployment.
-        # New machines always begin in safe NORMAL mode.
-        mode_file = machine_http / "mode.ipxe"
-
-        if not mode_file.exists():
-            shutil.copy2(
-                generated["normal.ipxe"],
-                mode_file,
-            )
-
         print()
         print("Deployed:")
         print(f"  {DATA_ROOT / 'http' / 'boot.ipxe'}")
         print(f"  {machine_http / 'normal.ipxe'}")
         print(f"  {machine_http / 'provision.ipxe'}")
-        print(f"  {mode_file}")
         print(f"  {machine_http / 'user-data'}")
         print(f"  {machine_http / 'meta-data'}")
 

@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ $# -lt 1 ]]; then
+    echo "Usage:"
+    echo "  ./forge machines"
+    echo "  ./forge status <machine>"
+    echo "  ./forge wake <machine>"
+    echo "  ./forge provision <machine>"
+    exit 2
+fi
+
+COMMAND="$1"
+shift
+
+case "$COMMAND" in
+    machines)
+        exec "$ROOT/scripts/machines.py" list
+        ;;
+
+    status)
+        if [[ $# -ne 1 ]]; then
+            echo "Usage: ./forge status <machine>"
+            exit 2
+        fi
+        exec "$ROOT/scripts/check-machine" "$1"
+        ;;
+
+    wake)
+        if [[ $# -ne 1 ]]; then
+            echo "Usage: ./forge wake <machine>"
+            exit 2
+        fi
+        exec "$ROOT/scripts/wake-machine" "$1"
+        ;;
+
+    provision)
+        if [[ $# -ne 1 ]]; then
+            echo "Usage: ./forge provision <machine>"
+            exit 2
+        fi
+        exec "$ROOT/scripts/provision-machine" "$1"
+        ;;
+
+    *)
+        echo "ERROR: Unknown command: $COMMAND"
+        echo
+        echo "Available commands:"
+        echo "  machines"
+        echo "  status <machine>"
+        echo "  wake <machine>"
+        echo "  provision <machine>"
+        exit 2
+        ;;
+esac

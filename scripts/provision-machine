@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 <machine>"
+    exit 2
+fi
+
+MACHINE="$1"
+MACHINE_FILE="$ROOT/machines/$MACHINE/machine.yaml"
+SSH_KEY="$ROOT/secrets/ssh/id_ed25519_ai_forge"
+SSH_USER="nispoe"
+
+ARMED=0
+
+cleanup() {
+    rc=$?
+
+    trap - ERR
+
+    if [[ "$ARMED" -eq 1 ]]; then
+        echo
+        echo "ERROR: Provisioning failed after machine was armed."
+        echo "Resetting $MACHINE to NORMAL..."
+
+        "$ROOT/scripts/set-mode" "$MACHINE" normal || true
+    fi
+
+    exit "$rc"
+}
+
+trap cleanup ERR
+
+if [[ ! -f "$MACHINE_FILE" ]]; then
+    echo "ERROR: Unknown machine: $MACHINE" >&2
+    exit 3
+fi
+
+readarray -t INFO < <(
+    python3 - "$MACHINE_FILE" <<'PY'
+import sys
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    machine = yaml.safe_load(f)
+
+network = machine.get("network", {})
+print(network.get("provisioning_ip", ""))
+print(network.get("provisioning_mac", ""))
+PY
+)
+
+IP="${INFO[0]}"
+MAC="${INFO[1]}"
+
+if [[ -z "$IP" || -z "$MAC" ]]; then
+    echo "ERROR: Missing provisioning_ip or provisioning_mac for $MACHINE" >&2
+    exit 3
+fi
+
+if [[ ! -f "$SSH_KEY" ]]; then
+    echo "ERROR: Missing AI Forge SSH key: $SSH_KEY" >&2
+    exit 4
+fi
+
+echo "Machine: $MACHINE"
+echo "IP:      $IP"
+echo "MAC:     $MAC"
+echo
+
+echo "Checking machine readiness..."
+
+if ! "$ROOT/scripts/check-machine" "$MACHINE"; then
+    echo
+    echo "ERROR: $MACHINE is not SSH-ready." >&2
+    echo "Run:"
+    echo "  ./scripts/wake-machine $MACHINE"
+    exit 10
+fi
+
+echo
+echo "Generating configuration..."
+"$ROOT/scripts/generate.py" "$MACHINE"
+
+echo "Validating configuration..."
+"$ROOT/scripts/validate-machine.py" "$MACHINE"
+
+echo "Deploying configuration..."
+"$ROOT/scripts/generate.py" "$MACHINE" --deploy
+
+MAC_COMPACT="$(echo "$MAC" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+
+echo
+echo "Discovering PXE UEFI entry..."
+
+EFI_OUTPUT="$(
+    ssh \
+        -i "$SSH_KEY" \
+        "$SSH_USER@$IP" \
+        "efibootmgr -v"
+)"
+
+PXE_BOOT="$(
+    printf '%s\n' "$EFI_OUTPUT" |
+    awk -v mac="$MAC_COMPACT" '
+        BEGIN { IGNORECASE=1 }
+        /^Boot[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]/ &&
+        /PXE IPv4/ &&
+        index(tolower($0), mac) {
+            id=substr($1,5,4)
+            sub(/\*/, "", id)
+            print id
+        }
+    '
+)"
+
+MATCH_COUNT="$(printf '%s\n' "$PXE_BOOT" | sed '/^$/d' | wc -l)"
+
+if [[ "$MATCH_COUNT" -eq 0 ]]; then
+    echo "ERROR: No PXE IPv4 UEFI entry matched MAC $MAC" >&2
+    exit 20
+fi
+
+if [[ "$MATCH_COUNT" -ne 1 ]]; then
+    echo "ERROR: Multiple PXE entries matched MAC $MAC:" >&2
+    printf '%s\n' "$PXE_BOOT" >&2
+    exit 21
+fi
+
+echo "PXE BootNext entry: $PXE_BOOT"
+
+echo
+echo "Provisioning plan:"
+echo "  Machine:  $MACHINE"
+echo "  IP:       $IP"
+echo "  MAC:      $MAC"
+echo "  PXE boot: $PXE_BOOT"
+echo "  Action:   WIPE AND REINSTALL configured OS disk"
+echo
+
+echo "Setting one-time PXE boot..."
+
+ssh -t \
+    -i "$SSH_KEY" \
+    "$SSH_USER@$IP" \
+    "sudo efibootmgr --bootnext $PXE_BOOT"
+
+echo
+echo "Arming one-shot provisioning..."
+
+"$ROOT/scripts/set-mode" "$MACHINE" provision
+ARMED=1
+
+echo
+echo "Removing old SSH host key before reprovisioning..."
+
+"$ROOT/scripts/forget-host-key" "$MACHINE"
+
+echo
+echo "Rebooting $MACHINE into PXE..."
+
+ssh -t \
+    -i "$SSH_KEY" \
+    "$SSH_USER@$IP" \
+    "sudo reboot"
+
+ARMED=0
+
+echo
+echo "Provision request sent."
+echo "The controller should consume PROVISION and return mode to NORMAL."

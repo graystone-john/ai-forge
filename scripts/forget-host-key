@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 <machine>"
+    exit 2
+fi
+
+MACHINE="$1"
+MACHINE_FILE="$ROOT/machines/$MACHINE/machine.yaml"
+
+if [[ ! -f "$MACHINE_FILE" ]]; then
+    echo "ERROR: Unknown machine: $MACHINE" >&2
+    exit 3
+fi
+
+IP="$(
+    python3 - "$MACHINE_FILE" <<'PY'
+import sys
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    machine = yaml.safe_load(f)
+
+print(machine.get("network", {}).get("provisioning_ip", ""))
+PY
+)"
+
+if [[ -z "$IP" ]]; then
+    echo "ERROR: No provisioning_ip configured for $MACHINE" >&2
+    exit 3
+fi
+
+echo "Machine: $MACHINE"
+echo "IP:      $IP"
+
+if ssh-keygen -F "$IP" >/dev/null 2>&1; then
+    echo "Removing previous SSH host key..."
+    ssh-keygen -R "$IP"
+else
+    echo "No previous SSH host key recorded."
+fi
