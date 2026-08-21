@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+BASE_CONFIG="${ROOT}/configs/dnsmasq/provisioning.conf"
+MACHINE_CONFIG="${ROOT}/generated/dnsmasq/machines.conf"
+
+if [ ! -f "$BASE_CONFIG" ]; then
+    echo "Missing: $BASE_CONFIG"
+    exit 1
+fi
+
+if [ ! -f "$MACHINE_CONFIG" ]; then
+    echo "Missing generated machine configuration."
+    echo "Run: ./scripts/generate-dnsmasq.py"
+    exit 1
+fi
+
+sudo install -m 0644 \
+    "$BASE_CONFIG" \
+    /etc/dnsmasq.d/provisioning.conf
+
+sudo install -m 0644 \
+    "$MACHINE_CONFIG" \
+    /etc/dnsmasq.d/ai-forge-machines.conf
+
+sudo dnsmasq --test
+sudo systemctl restart dnsmasq
+
+echo "dnsmasq deployed successfully."
+

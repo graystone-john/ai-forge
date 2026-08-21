@@ -1,4 +1,7 @@
-name: athena
+name: athena-01
+family: athena
+generation: 1
+
 role: provisioning-controller
 architecture: arm64
 platform: NVIDIA DGX Spark

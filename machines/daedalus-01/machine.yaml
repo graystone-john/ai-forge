@@ -1,4 +1,7 @@
-name: daedalus
+name: daedalus-01
+family: daedalus
+generation: 1
+
 role: local-ai-coding-node
 architecture: amd64
 
@@ -14,6 +17,7 @@ hardware:
 
 network:
   provisioning_mac: "f0:2f:74:d3:34:d2"
+  provisioning_ip: 10.10.10.20
   provisioning_subnet: 10.10.10.0/24
 
 profiles:
