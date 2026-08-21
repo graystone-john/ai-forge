@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 <machine>"
+    exit 2
+fi
+
+MACHINE="$1"
+MACHINE_FILE="$ROOT/machines/$MACHINE/machine.yaml"
+
+if [[ ! -f "$MACHINE_FILE" ]]; then
+    echo "ERROR: Unknown machine: $MACHINE" >&2
+    exit 3
+fi
+
+readarray -t INFO < <(
+    python3 - "$MACHINE_FILE" <<'PY'
+import sys
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    machine = yaml.safe_load(f)
+
+network = machine.get("network", {})
+
+print(network.get("provisioning_ip", ""))
+print(network.get("provisioning_mac", ""))
+PY
+)
+
+IP="${INFO[0]}"
+MAC="${INFO[1]}"
+SSH_USER="nispoe"
+SSH_KEY="$ROOT/secrets/ssh/id_ed25519_ai_forge"
+
+if [[ -z "$IP" ]]; then
+    echo "ERROR: No provisioning_ip configured for $MACHINE" >&2
+    exit 3
+fi
+
+echo "Machine: $MACHINE"
+echo "IP:      $IP"
+echo "MAC:     ${MAC:-unknown}"
+
+#
+# Network reachability is informational.
+#
+if ping -c 1 -W 1 "$IP" >/dev/null 2>&1; then
+    echo "Network: reachable"
+else
+    echo "Network: unreachable"
+    echo "SSH:     unavailable"
+    echo "State:   unreachable"
+    exit 10
+fi
+
+if [[ ! -f "$SSH_KEY" ]]; then
+    echo "SSH:     management key missing"
+    echo "State:   not ready"
+    exit 11
+fi
+
+#
+# SSH authentication is the authoritative READY test.
+#
+if ssh \
+    -o BatchMode=yes \
+    -o ConnectTimeout=3 \
+    -o StrictHostKeyChecking=accept-new \
+    -i "$SSH_KEY" \
+    "$SSH_USER@$IP" true >/dev/null 2>&1; then
+
+    echo "SSH:     ready"
+    echo "State:   ready"
+    exit 0
+fi
+
+echo "SSH:     not ready"
+echo "State:   booting/unavailable"
+exit 12
