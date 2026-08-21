@@ -14,6 +14,7 @@ hardware:
   os_disk:
     model: Samsung SSD 980 PRO 2TB
     serial: S6B0NL0W337647E
+    udev_serial: Samsung_SSD_980_PRO_2TB_S6B0NL0W337647E_1
 
 network:
   provisioning_mac: "f0:2f:74:d3:34:d2"

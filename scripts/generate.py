@@ -48,7 +48,7 @@ def main():
         "ubuntu_iso": forge["images"]["ubuntu"][ubuntu_version]["iso"],
         "username": forge["defaults"]["username"],
         "password_hash": secrets["password_hash"],
-        "os_disk_serial": machine["hardware"]["os_disk"]["serial"],
+        "os_disk_serial": machine["hardware"]["os_disk"]["udev_serial"],
     }
 
     env = Environment(

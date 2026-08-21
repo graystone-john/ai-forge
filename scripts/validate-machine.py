@@ -21,7 +21,7 @@ userdata = yaml.safe_load(userdata_file.read_text())
 
 a = userdata["autoinstall"]
 
-expected_serial = machine["hardware"]["os_disk"]["serial"]
+expected_serial = machine["hardware"]["os_disk"]["udev_serial"]
 
 disks = [
     item for item in a["storage"]["config"]
@@ -52,7 +52,8 @@ print("AI Forge validation: PASS")
 print(f"Machine:       {machine['name']}")
 print(f"Architecture:  {machine['architecture']}")
 print(f"Hostname:      {a['identity']['hostname']}")
-print(f"OS disk model: {machine['hardware']['os_disk']['model']}")
-print(f"OS disk serial:{expected_serial}")
+print(f"OS disk model:       {machine['hardware']['os_disk']['model']}")
+print(f"Hardware serial:     {machine['hardware']['os_disk']['serial']}")
+print(f"Installer udev serial:{machine['hardware']['os_disk']['udev_serial']}")
 print("Disk wipe:     ENABLED")
 print("Autoinstall:   ENABLED")
