@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
-import sys
+import argparse
+import shutil
+
 import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = Path.home() / "graystone" / "provisioning-data"
 
 
 def load_yaml(path):
@@ -14,14 +17,20 @@ def load_yaml(path):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print(f"Usage: {sys.argv[0]} <machine>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("machine")
+    parser.add_argument(
+        "--deploy",
+        action="store_true",
+        help="Deploy generated files into the live provisioning-data tree",
+    )
+    args = parser.parse_args()
 
-    machine_name = sys.argv[1]
+    machine_name = args.machine
 
     forge = load_yaml(ROOT / "config" / "forge.yaml")
     machine = load_yaml(ROOT / "machines" / machine_name / "machine.yaml")
+    secrets = load_yaml(ROOT / "secrets" / "local.yaml")
 
     profiles = {}
     for profile_name in machine.get("profiles", []):
@@ -37,6 +46,8 @@ def main():
         "provisioning_server": forge["provisioning"]["server_ip"],
         "ubuntu_version": ubuntu_version,
         "ubuntu_iso": forge["images"]["ubuntu"][ubuntu_version]["iso"],
+        "username": forge["defaults"]["username"],
+        "password_hash": secrets["password_hash"],
     }
 
     env = Environment(
@@ -46,16 +57,52 @@ def main():
         keep_trailing_newline=True,
     )
 
-    template = env.get_template("ipxe/ubuntu-server.ipxe")
-    rendered = template.render(**context)
-
     output_dir = ROOT / "generated" / machine_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_file = output_dir / "boot.ipxe"
-    output_file.write_text(rendered, encoding="utf-8")
+    outputs = {
+        "ipxe/ubuntu-server.ipxe": "boot.ipxe",
+        "autoinstall/user-data.yaml.j2": "user-data",
+        "autoinstall/meta-data.j2": "meta-data",
+    }
 
-    print(f"Generated {output_file}")
+    generated = {}
+
+    for template_name, output_name in outputs.items():
+        template = env.get_template(template_name)
+        rendered = template.render(**context)
+
+        output_file = output_dir / output_name
+        output_file.write_text(rendered, encoding="utf-8")
+
+        generated[output_name] = output_file
+        print(f"Generated {output_file}")
+
+    if args.deploy:
+        machine_http = DATA_ROOT / "http" / machine_name
+        machine_http.mkdir(parents=True, exist_ok=True)
+
+        # Current dnsmasq/iPXE entry expects this shared boot path.
+        shutil.copy2(
+            generated["boot.ipxe"],
+            DATA_ROOT / "http" / "boot.ipxe",
+        )
+
+        shutil.copy2(
+            generated["user-data"],
+            machine_http / "user-data",
+        )
+
+        shutil.copy2(
+            generated["meta-data"],
+            machine_http / "meta-data",
+        )
+
+        print()
+        print("Deployed:")
+        print(f"  {DATA_ROOT / 'http' / 'boot.ipxe'}")
+        print(f"  {machine_http / 'user-data'}")
+        print(f"  {machine_http / 'meta-data'}")
 
 
 if __name__ == "__main__":
