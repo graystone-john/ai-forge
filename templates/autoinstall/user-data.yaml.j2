@@ -1,0 +1,66 @@
+#cloud-config
+autoinstall:
+  version: 1
+
+  locale: en_US.UTF-8
+
+  keyboard:
+    layout: us
+
+  identity:
+    hostname: {{ machine_name }}
+    username: {{ username }}
+    password: "{{ password_hash }}"
+
+  ssh:
+    install-server: true
+    allow-pw: true
+
+  storage:
+    config:
+      - id: disk-os
+        type: disk
+        match:
+          serial: "{{ os_disk_serial }}"
+        wipe: superblock-recursive
+        preserve: false
+        ptable: gpt
+        grub_device: true
+
+      - id: partition-efi
+        type: partition
+        device: disk-os
+        size: 1G
+        flag: boot
+        number: 1
+
+      - id: format-efi
+        type: format
+        volume: partition-efi
+        fstype: fat32
+
+      - id: mount-efi
+        type: mount
+        device: format-efi
+        path: /boot/efi
+
+      - id: partition-root
+        type: partition
+        device: disk-os
+        size: -1
+        number: 2
+
+      - id: format-root
+        type: format
+        volume: partition-root
+        fstype: ext4
+
+      - id: mount-root
+        type: mount
+        device: format-root
+        path: /
+
+  packages:
+    - openssh-server
+
+  updates: security
