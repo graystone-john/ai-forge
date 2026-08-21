@@ -14,7 +14,9 @@ autoinstall:
 
   ssh:
     install-server: true
-    allow-pw: true
+    allow-pw: false
+    authorized-keys:
+      - "{{ ssh_authorized_key }}"
 
   storage:
     config:

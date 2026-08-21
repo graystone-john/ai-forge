@@ -31,6 +31,17 @@ def main():
     forge = load_yaml(ROOT / "config" / "forge.yaml")
     machine = load_yaml(ROOT / "machines" / machine_name / "machine.yaml")
     secrets = load_yaml(ROOT / "secrets" / "local.yaml")
+    ssh_public_key_path = ROOT / secrets["ssh"]["management_public_key"]
+
+    if not ssh_public_key_path.is_file():
+        raise RuntimeError(
+            f"SSH management public key not found: {ssh_public_key_path}"
+        )
+
+    ssh_authorized_key = ssh_public_key_path.read_text(
+        encoding="utf-8"
+    ).strip()
+
 
     profiles = {}
     for profile_name in machine.get("profiles", []):
@@ -49,6 +60,7 @@ def main():
         "username": forge["defaults"]["username"],
         "password_hash": secrets["password_hash"],
         "os_disk_serial": machine["hardware"]["os_disk"]["udev_serial"],
+	"ssh_authorized_key": ssh_authorized_key,
     }
 
     env = Environment(

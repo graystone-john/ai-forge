@@ -20,6 +20,34 @@ machine = yaml.safe_load(machine_file.read_text())
 userdata = yaml.safe_load(userdata_file.read_text())
 
 a = userdata["autoinstall"]
+ssh = a.get("ssh", {})
+
+if ssh.get("install-server") is not True:
+    raise RuntimeError("SSH server is not enabled in autoinstall")
+
+if ssh.get("allow-pw") is not False:
+    raise RuntimeError("SSH password authentication must be disabled")
+
+authorized_keys = ssh.get("authorized-keys", [])
+
+if not authorized_keys:
+    raise RuntimeError("No SSH authorized key configured")
+
+if not any(
+    key.startswith(("ssh-ed25519 ", "ssh-rsa "))
+    for key in authorized_keys
+):
+    raise RuntimeError("No valid SSH public key configured")
+
+late_commands = a.get("late-commands", [])
+
+if not any(
+    "systemctl enable ssh.service" in cmd
+    for cmd in late_commands
+):
+    raise RuntimeError(
+        "Autoinstall does not explicitly enable ssh.service"
+    )
 
 expected_serial = machine["hardware"]["os_disk"]["udev_serial"]
 
