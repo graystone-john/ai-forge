@@ -9,27 +9,24 @@ fi
 MACHINE="$1"
 MODE="$2"
 
-DATA_ROOT="${HOME}/graystone/provisioning-data"
-MACHINE_DIR="${DATA_ROOT}/http/${MACHINE}"
-
 case "$MODE" in
     normal|provision)
         ;;
     *)
         echo "Invalid mode: $MODE"
+        echo "Valid modes: normal, provision"
         exit 1
         ;;
 esac
 
-SOURCE="${MACHINE_DIR}/${MODE}.ipxe"
-TARGET="${MACHINE_DIR}/mode.ipxe"
+STATE_DIR="${HOME}/graystone/provisioning-data/state/${MACHINE}"
 
-if [ ! -f "$SOURCE" ]; then
-    echo "Missing: $SOURCE"
-    echo "Run: ./scripts/generate.py ${MACHINE} --deploy"
-    exit 1
+mkdir -p "$STATE_DIR"
+
+printf '%s\n' "$MODE" > "${STATE_DIR}/mode"
+
+if [ "$MODE" = "provision" ]; then
+    echo "${MACHINE}: armed for ONE provisioning boot"
+else
+    echo "${MACHINE}: mode set to normal"
 fi
-
-cp "$SOURCE" "$TARGET"
-
-echo "${MACHINE}: mode set to ${MODE}"
