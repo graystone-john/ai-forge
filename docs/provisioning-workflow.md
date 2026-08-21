@@ -266,3 +266,58 @@ Track the full provisioning lifecycle, including:
 
 Provisioning should be considered complete only after the newly installed
 system boots and AI Forge management SSH succeeds.
+
+### Host Identity After Reprovisioning
+
+A successful bare-metal reprovision creates new SSH host keys.
+
+AI Forge handles this transition intentionally:
+
+1. The existing host identity must be valid before provisioning begins.
+2. AI Forge removes the old host-key entry only after the machine has been
+   validated and provisioning has been armed.
+3. The newly installed machine is expected to appear at its registered
+   provisioning IP.
+4. The first AI Forge readiness check after the known reprovision may accept
+   and record the new host key.
+5. Subsequent SSH connections require that recorded host key normally.
+
+AI Forge must not globally disable SSH host-key checking.
+
+This first-contact trust model is acceptable for the isolated provisioning
+network but is not intended to be the final identity-attestation mechanism.
+Future provisioning observability may strengthen post-install host identity
+verification.
+
+## Managed Node Independence
+
+A normally installed AI Forge node must remain operational when its
+provisioning controller is unavailable.
+
+The provisioning Ethernet interface is a management interface, not a boot
+dependency.
+
+Managed nodes must therefore satisfy:
+
+- absence of Athena must not significantly delay normal OS boot;
+- the provisioning interface must not be marked boot-critical;
+- loss of provisioning DHCP must not prevent local login;
+- normal Internet connectivity should not depend on the provisioning
+  controller when another network path is configured.
+
+During testing, Ubuntu Autoinstall generated the following configuration on
+daedalus-01:
+
+    enp5s0:
+      critical: true
+      dhcp-identifier: "mac"
+      dhcp4: true
+
+With athena-01 powered off, systemd-networkd-wait-online waited 120 seconds and
+failed before boot continued.
+
+Post-install configuration must replace this behavior so the provisioning
+interface is optional/non-blocking.
+
+For daedalus-family systems, Wi-Fi will be configured during post-install
+automation and will provide independent Internet/default-route connectivity.
