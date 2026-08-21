@@ -1,0 +1,7 @@
+provisioning:
+  server_ip: 10.10.10.1
+
+images:
+  ubuntu:
+    "24.04":
+      iso: ubuntu-24.04.4-live-server-amd64.iso

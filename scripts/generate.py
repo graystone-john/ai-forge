@@ -7,9 +7,11 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
 def load_yaml(path):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
 
 def main():
     if len(sys.argv) != 2:
@@ -18,6 +20,7 @@ def main():
 
     machine_name = sys.argv[1]
 
+    forge = load_yaml(ROOT / "config" / "forge.yaml")
     machine = load_yaml(ROOT / "machines" / machine_name / "machine.yaml")
 
     profiles = {}
@@ -27,12 +30,13 @@ def main():
         )
 
     ubuntu = profiles["ubuntu-ai-node"]["os"]
+    ubuntu_version = ubuntu["version"]
 
     context = {
         "machine_name": machine["name"],
-        "provisioning_server": "10.10.10.1",
-        "ubuntu_version": ubuntu["version"],
-        "ubuntu_iso": "ubuntu-24.04.4-live-server-amd64.iso",
+        "provisioning_server": forge["provisioning"]["server_ip"],
+        "ubuntu_version": ubuntu_version,
+        "ubuntu_iso": forge["images"]["ubuntu"][ubuntu_version]["iso"],
     }
 
     env = Environment(
@@ -52,6 +56,7 @@ def main():
     output_file.write_text(rendered, encoding="utf-8")
 
     print(f"Generated {output_file}")
+
 
 if __name__ == "__main__":
     main()
