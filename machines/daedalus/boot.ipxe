@@ -1,0 +1,13 @@
+#!ipxe
+
+echo ==================================================
+echo DGX Spark AI Provisioning Server
+echo ==================================================
+echo
+echo PXE and HTTP boot are working!
+echo Client IP: ${net0/ip}
+echo Server: 10.10.10.1
+echo
+echo Apex/3090 provisioning test successful.
+echo
+shell

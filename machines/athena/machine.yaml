@@ -1,0 +1,7 @@
+name: athena
+role: provisioning-controller
+platform: NVIDIA DGX Spark
+
+network:
+  provisioning_ip: 10.10.10.1
+  provisioning_interface: enP7s7

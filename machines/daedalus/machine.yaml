@@ -1,0 +1,16 @@
+name: daedalus
+role: local-ai-coding-node
+
+hardware:
+  motherboard: ASUS ROG Maximus XIII Apex
+  cpu: Intel Core i9-11900K
+  memory_gb: 64
+  gpu: ASUS GeForce RTX 3090 OC
+  os_disk: Samsung 980 PRO 2TB
+
+network:
+  provisioning_subnet: 10.10.10.0/24
+
+os:
+  distribution: ubuntu
+  version: "24.04"
