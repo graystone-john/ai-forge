@@ -64,3 +64,6 @@ autoinstall:
     - openssh-server
 
   updates: security
+
+  late-commands:
+    - curtin in-target --target=/target -- systemctl enable ssh.service

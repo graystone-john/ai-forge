@@ -4,8 +4,9 @@ set server {{ provisioning_server }}
 
 echo ==================================================
 echo Graystone AI Forge
-echo Machine: {{ machine_name }}
+echo Provisioning client
+echo MAC: ${net0/mac}
 echo ==================================================
 echo
 
-chain http://${server}/pxe/{{ machine_name }}/mode.ipxe
+chain http://${server}/forge/boot-mac?mac=${net0/mac}
