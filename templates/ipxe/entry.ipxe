@@ -1,0 +1,11 @@
+#!ipxe
+
+set server {{ provisioning_server }}
+
+echo ==================================================
+echo Graystone AI Forge
+echo Machine: {{ machine_name }}
+echo ==================================================
+echo
+
+chain http://${server}/pxe/{{ machine_name }}/mode.ipxe

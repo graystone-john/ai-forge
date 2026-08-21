@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$#" -ne 2 ]; then
+    echo "Usage: $0 <machine> <normal|provision>"
+    exit 1
+fi
+
+MACHINE="$1"
+MODE="$2"
+
+DATA_ROOT="${HOME}/graystone/provisioning-data"
+MACHINE_DIR="${DATA_ROOT}/http/${MACHINE}"
+
+case "$MODE" in
+    normal|provision)
+        ;;
+    *)
+        echo "Invalid mode: $MODE"
+        exit 1
+        ;;
+esac
+
+SOURCE="${MACHINE_DIR}/${MODE}.ipxe"
+TARGET="${MACHINE_DIR}/mode.ipxe"
+
+if [ ! -f "$SOURCE" ]; then
+    echo "Missing: $SOURCE"
+    echo "Run: ./scripts/generate.py ${MACHINE} --deploy"
+    exit 1
+fi
+
+cp "$SOURCE" "$TARGET"
+
+echo "${MACHINE}: mode set to ${MODE}"

@@ -1,0 +1,9 @@
+#!ipxe
+
+echo Graystone AI Forge
+echo Machine: {{ machine_name }}
+echo Mode: NORMAL
+echo
+echo Continuing to local boot...
+
+exit
