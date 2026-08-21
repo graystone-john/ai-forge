@@ -1,0 +1,15 @@
+name: ubuntu-ai-node
+
+os:
+  distribution: ubuntu
+  version: "24.04"
+  edition: server
+
+ssh:
+  enabled: true
+
+updates:
+  policy: security
+
+packages:
+  - openssh-server

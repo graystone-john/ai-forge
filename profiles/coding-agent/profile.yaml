@@ -1,0 +1,10 @@
+name: coding-agent
+
+description: >
+  Local AI inference and coding-agent node.
+
+features:
+  nvidia_gpu: true
+  container_runtime: true
+  local_inference: true
+  coding_agents: true

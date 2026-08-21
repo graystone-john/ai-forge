@@ -1,16 +1,21 @@
 name: daedalus
 role: local-ai-coding-node
+architecture: amd64
 
 hardware:
   motherboard: ASUS ROG Maximus XIII Apex
   cpu: Intel Core i9-11900K
   memory_gb: 64
   gpu: ASUS GeForce RTX 3090 OC
-  os_disk: Samsung 980 PRO 2TB
+
+  os_disk:
+    model: Samsung SSD 980 PRO 2TB
+    serial: S6B0NL0W337647E
 
 network:
+  provisioning_mac: "f0:2f:74:d3:34:d2"
   provisioning_subnet: 10.10.10.0/24
 
-os:
-  distribution: ubuntu
-  version: "24.04"
+profiles:
+  - ubuntu-ai-node
+  - coding-agent

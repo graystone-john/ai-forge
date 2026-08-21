@@ -1,7 +1,9 @@
 name: athena
 role: provisioning-controller
+architecture: arm64
 platform: NVIDIA DGX Spark
 
 network:
-  provisioning_ip: 10.10.10.1
   provisioning_interface: enP7s7
+  provisioning_ip: 10.10.10.1
+  provisioning_subnet: 10.10.10.0/24

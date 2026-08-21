@@ -1,13 +1,13 @@
 #!ipxe
 
-set server 10.10.10.1
-set base http://${server}/pxe/ubuntu/24.04
-set iso ubuntu-24.04.4-live-server-amd64.iso
+set server {{ provisioning_server }}
+set base http://${server}/pxe/ubuntu/{{ ubuntu_version }}
+set iso {{ ubuntu_iso }}
 
 echo ==================================================
 echo Graystone AI Forge
-echo Machine: Daedalus
-echo Ubuntu 24.04.4 LTS Server
+echo Machine: {{ machine_name }}
+echo Ubuntu {{ ubuntu_version }} Server
 echo ==================================================
 echo
 echo Loading Ubuntu kernel...
