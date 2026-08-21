@@ -16,7 +16,9 @@ echo The configured OS disk will be erased.
 echo
 echo Loading Ubuntu kernel...
 
-kernel ${base}/vmlinuz initrd=initrd ip=dhcp url=${base}/${iso} autoinstall ds=nocloud-net;s=http://${server}/pxe/{{ machine_name }}/ nomodeset
+set semi:hex 3b
+
+kernel ${base}/vmlinuz initrd=initrd ip=dhcp url=${base}/${iso} autoinstall ds=nocloud-net${semi:string}s=http://${server}/pxe/{{ machine_name }}/ nomodeset
 
 echo Loading Ubuntu initrd...
 initrd --name initrd ${base}/initrd
