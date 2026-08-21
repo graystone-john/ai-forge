@@ -25,13 +25,13 @@ autoinstall:
         wipe: superblock-recursive
         preserve: false
         ptable: gpt
-        grub_device: true
 
       - id: partition-efi
         type: partition
         device: disk-os
         size: 1G
         flag: boot
+        grub_device: true
         number: 1
 
       - id: format-efi
