@@ -1,13 +1,24 @@
 #!ipxe
 
+set server 10.10.10.1
+set base http://${server}/pxe/ubuntu/24.04
+set iso ubuntu-24.04.4-live-server-amd64.iso
+
 echo ==================================================
-echo DGX Spark AI Provisioning Server
+echo Graystone AI Forge
+echo Machine: Daedalus
+echo Ubuntu 24.04.4 LTS Server
 echo ==================================================
 echo
-echo PXE and HTTP boot are working!
-echo Client IP: ${net0/ip}
-echo Server: 10.10.10.1
-echo
-echo Apex/3090 provisioning test successful.
-echo
-shell
+echo Loading Ubuntu kernel...
+
+kernel ${base}/vmlinuz \
+  ip=dhcp \
+  url=${base}/${iso} \
+  cloud-config-url=/dev/null
+
+echo Loading Ubuntu initrd...
+initrd ${base}/initrd
+
+echo Starting Ubuntu installer...
+boot
