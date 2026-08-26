@@ -12,7 +12,30 @@ Examples:
     ./forge machines
     ./forge status daedalus-01
     ./forge wake daedalus-01
+    ./forge deploy daedalus-01
+    ./forge boot daedalus-01 status
     ./forge provision daedalus-01
+
+The primary commands are:
+
+    machines
+        List machines known to AI Forge.
+
+    status <machine>
+        Check network and AI Forge SSH readiness.
+
+    wake <machine>
+        Wake a machine and wait for management readiness.
+
+    deploy <machine>
+        Generate, validate, and publish provisioning artifacts without
+        rebooting or provisioning the target.
+
+    boot <machine> <action>
+        Perform restricted remote firmware/power-control operations.
+
+    provision <machine>
+        Perform the complete destructive bare-metal reprovision workflow.
 
 The scripts under `scripts/` are implementation components and may also be used
 directly for debugging.
@@ -83,6 +106,89 @@ Normal startup therefore follows:
 
 AI Forge does not require PXE to remain permanently first in firmware.
 
+## Remote Boot Control
+
+AI Forge exposes restricted remote boot control through:
+
+    ./forge boot <machine> <action>
+
+Supported actions are:
+
+    status
+    pxe-next
+    clear-next
+    reboot
+    poweroff
+
+For example:
+
+    ./forge boot daedalus-01 status
+
+The controller does not receive unrestricted passwordless sudo access on the
+managed node.
+
+Instead, Autoinstall installs the root-owned helper:
+
+    /usr/local/sbin/ai-forge-boot-control
+
+and machine identity:
+
+    /etc/ai-forge/machine.json
+
+The sudo policy permits the AI Forge management user to execute only specific
+boot-control operations through this helper.
+
+The helper discovers the PXE UEFI entry by matching the provisioning MAC
+registered for the machine against the MAC embedded in the firmware boot
+entry.
+
+It does not accept arbitrary UEFI boot-entry numbers from the remote caller.
+
+The `pxe-next` operation:
+
+1. Reads the registered provisioning MAC.
+2. Finds exactly one matching UEFI boot entry.
+3. Sets BootNext to that entry.
+4. Reads BootNext again and verifies the change.
+
+The `clear-next` operation will clear BootNext only when the current BootNext
+is the registered AI Forge PXE entry. It refuses to remove an unrelated
+BootNext setting.
+
+Reboot and poweroff are performed through the same restricted helper.
+
+This provides the controller with the privileges required for provisioning
+without granting unrestricted passwordless root access.
+
+## Deployment
+
+Generate, validate, and publish a machine's provisioning configuration with:
+
+    ./forge deploy daedalus-01
+
+Deployment performs:
+
+1. Generate machine-specific iPXE and Autoinstall configuration.
+2. Validate the machine configuration.
+3. Publish the generated artifacts to the provisioning HTTP tree.
+
+Deployment does not modify target firmware, reboot the target, or arm
+provisioning.
+
+This separation allows provisioning configuration to be prepared and inspected
+independently from destructive machine operations.
+
+Conceptually:
+
+    deploy
+        prepare provisioning artifacts
+
+    boot
+        control machine boot and power state
+
+    provision
+        orchestrate destructive bare-metal reprovisioning
+
 ## Remote Provisioning
 
 Provision a running, SSH-ready machine with:
@@ -92,18 +198,15 @@ Provision a running, SSH-ready machine with:
 The provisioning action performs:
 
 1. Verify the machine is SSH-ready.
-2. Generate machine-specific provisioning configuration.
-3. Validate the generated Autoinstall configuration.
-4. Deploy PXE and NoCloud artifacts.
-5. Read UEFI boot entries remotely.
-6. Find exactly one PXE IPv4 entry matching the machine's registered
-   provisioning MAC.
-7. Display the destructive provisioning plan.
-8. Set UEFI `BootNext` to the matching PXE entry.
-9. Arm AI Forge's one-shot `provision` state.
-10. Remove the previous SSH host-key entry because a known destructive
-    reprovision will generate a new server identity.
-11. Reboot the machine.
+2. Run the normal deployment workflow to generate, validate, and publish the
+   provisioning configuration.
+3. Display the destructive provisioning plan.
+4. Ask the target-side boot-control helper to set and verify one-time PXE
+   BootNext.
+5. Arm AI Forge's one-shot `provision` state.
+6. Ask the target-side boot-control helper to reboot the machine.
+7. Remove the previous SSH host-key entry after the reboot request because the
+   known destructive reprovision will generate a new server identity.
 
 The permanent UEFI `BootOrder` is never modified.
 
@@ -124,6 +227,15 @@ AI Forge temporarily sets:
 The next reboot uses PXE exactly once.
 
 After that boot, firmware automatically returns to the normal BootOrder.
+
+AI Forge verifies that BootNext was successfully set before provisioning
+continues.
+
+If provisioning fails or is interrupted before the reboot request is
+successfully issued, AI Forge attempts to clear the one-time PXE BootNext.
+
+AI Forge will clear BootNext only when it points to the machine's registered
+PXE entry.
 
 ## One-Shot Provisioning State
 
@@ -169,6 +281,10 @@ Example:
 
 Unknown MAC addresses fail closed.
 
+The registered provisioning MAC is also installed on the managed node and is
+used by the restricted boot-control helper to identify the correct PXE UEFI
+entry.
+
 ## Storage Safety
 
 The OS disk is selected using the installer-visible udev serial recorded in the
@@ -196,6 +312,35 @@ The local account password remains available for console/recovery use.
 The AI Forge management private key is local secret material and must never be
 committed to Git.
 
+The management username is defined by AI Forge configuration rather than being
+hardcoded into the remote boot-control workflow.
+
+## Privileged Operations
+
+AI Forge does not grant its management account unrestricted passwordless sudo.
+
+Operations required for remote provisioning are exposed through the root-owned:
+
+    /usr/local/sbin/ai-forge-boot-control
+
+The sudo policy permits only:
+
+    status
+    pxe-next
+    clear-next
+    reboot
+    poweroff
+
+The remote caller cannot supply arbitrary commands, arbitrary UEFI boot-entry
+numbers, or arbitrary efibootmgr arguments through this interface.
+
+The helper validates machine identity and provisioning MAC information from:
+
+    /etc/ai-forge/machine.json
+
+This creates a narrow privilege boundary between the controller and the managed
+node.
+
 ## SSH Host-Key Rotation
 
 A destructive reprovision generates new SSH host keys on the target.
@@ -203,14 +348,33 @@ A destructive reprovision generates new SSH host keys on the target.
 AI Forge removes the previously trusted host-key entry only as part of an
 intentional reprovision workflow.
 
+The old host-key entry is removed after the target reboot request has
+successfully been issued. It is not removed during configuration generation,
+validation, BootNext setup, or provisioning arming.
+
+This preserves the trusted host identity while AI Forge still needs to
+communicate with the currently installed operating system.
+
 Global SSH host-key checking must not be disabled.
 
-Automatic verification of the newly installed host identity will be addressed
-as part of provisioning observability/completion work.
+After a known reprovision, AI Forge permits the newly installed host identity
+to be recorded when management SSH first becomes available.
+
+Subsequent SSH connections use normal host-key checking.
+
+Stronger post-install identity verification may be added as part of future
+provisioning observability work.
 
 ## Failure Safety
 
 The provision workflow fails closed.
+
+Before the destructive reboot, AI Forge tracks two transient conditions:
+
+    BOOTNEXT_SET
+    ARMED
+
+Failures and operator interruptions use the same cleanup path.
 
 Examples:
 
@@ -219,11 +383,31 @@ Examples:
 - validation fails -> stop
 - no matching PXE entry -> stop
 - multiple matching PXE entries -> stop
-- BootNext cannot be set -> stop before provisioning is armed
+- BootNext cannot be set or verified -> stop before provisioning is armed
+- failure after BootNext is set -> clear AI Forge's PXE BootNext when possible
 - failure after provisioning is armed -> reset mode to normal when possible
+- Ctrl-C during preparation -> perform the same fail-closed cleanup
+- termination during preparation -> perform the same fail-closed cleanup
 
-If BootNext has already been set but provisioning is not armed, the machine may
-PXE once but should receive the safe NORMAL response.
+BootNext cleanup is itself restricted. AI Forge refuses to clear a BootNext
+setting belonging to a boot entry other than the machine's registered PXE
+entry.
+
+Once the reboot request has successfully been issued, firmware owns the
+one-time BootNext transition and AI Forge no longer attempts to clear it.
+
+The one-shot provisioning state is consumed by the controller when the target
+requests its provisioning PXE configuration.
+
+## Console Behavior
+
+Autoinstall directs installation and cloud-init output to log files rather than
+leaving verbose provisioning output on the normal console.
+
+The installed system should finish booting at a normal login prompt.
+
+Detailed provisioning output remains available through system log files for
+diagnostics.
 
 ## Athena Controller Recovery
 
@@ -241,13 +425,6 @@ The Athena bootstrap/reproducibility workflow should eventually install and
 validate these system configurations automatically.
 
 ## Future Work
-
-Separate workstreams handle:
-
-### Privileged Remote Boot Control
-
-Replace interactive sudo used for BootNext/reboot with a least-privilege,
-root-owned AI Forge helper.
 
 ### Headless Provisioning Observability
 
@@ -274,8 +451,8 @@ A successful bare-metal reprovision creates new SSH host keys.
 AI Forge handles this transition intentionally:
 
 1. The existing host identity must be valid before provisioning begins.
-2. AI Forge removes the old host-key entry only after the machine has been
-   validated and provisioning has been armed.
+2. AI Forge removes the old host-key entry only after the destructive reboot
+   request has been successfully issued.
 3. The newly installed machine is expected to appear at its registered
    provisioning IP.
 4. The first AI Forge readiness check after the known reprovision may accept
@@ -286,6 +463,7 @@ AI Forge must not globally disable SSH host-key checking.
 
 This first-contact trust model is acceptable for the isolated provisioning
 network but is not intended to be the final identity-attestation mechanism.
+
 Future provisioning observability may strengthen post-install host identity
 verification.
 
