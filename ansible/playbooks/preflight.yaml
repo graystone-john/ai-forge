@@ -1,0 +1,54 @@
+---
+- name: AI Forge Daedalus preflight
+  hosts: daedalus
+  gather_facts: true
+
+  tasks:
+    - name: Verify supported OS
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Ubuntu"
+          - ansible_distribution_major_version == "24"
+        fail_msg: "Unsupported operating system"
+
+    - name: Verify provisioning Ethernet exists
+      ansible.builtin.stat:
+        path: /sys/class/net/{{ provisioning.interface }}
+      register: provisioning_nic
+
+    - name: Require provisioning Ethernet
+      ansible.builtin.assert:
+        that:
+          - provisioning_nic.stat.exists
+        fail_msg: "Provisioning interface {{ provisioning.interface }} not found"
+
+    - name: Verify Intel Wi-Fi interface exists
+      ansible.builtin.stat:
+        path: /sys/class/net/wlp8s0
+      register: wifi_nic
+
+    - name: Require Wi-Fi interface
+      ansible.builtin.assert:
+        that:
+          - wifi_nic.stat.exists
+        fail_msg: "Wi-Fi interface wlp8s0 not found"
+
+    - name: Verify current Netplan file exists
+      ansible.builtin.stat:
+        path: /etc/netplan/50-cloud-init.yaml
+      register: netplan_file
+
+    - name: Require Netplan configuration
+      ansible.builtin.assert:
+        that:
+          - netplan_file.stat.exists
+        fail_msg: "Expected Netplan configuration not found"
+
+    - name: Report preflight result
+      ansible.builtin.debug:
+        msg:
+          - "Machine: {{ inventory_hostname }}"
+          - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Kernel: {{ ansible_kernel }}"
+          - "Provisioning interface: {{ provisioning.interface }}"
+          - "Wi-Fi interface: wlp8s0"

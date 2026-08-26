@@ -1,0 +1,19 @@
+network:
+  version: 2
+
+  ethernets:
+    {{ provisioning.interface }}:
+      dhcp4: true
+      dhcp-identifier: mac
+      critical: false
+      optional: true
+      dhcp4-overrides:
+        use-routes: false
+
+  wifis:
+    wlp8s0:
+      dhcp4: true
+      optional: true
+      access-points:
+        "{{ wifi.ssid }}":
+          password: "{{ wifi.password }}"

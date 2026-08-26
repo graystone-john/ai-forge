@@ -1,0 +1,5 @@
+ansible_user: nispoe
+ansible_python_interpreter: /usr/bin/python3
+
+ai_forge_family: daedalus
+ai_forge_role: local-ai-coding-node

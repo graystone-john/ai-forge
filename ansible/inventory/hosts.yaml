@@ -1,0 +1,6 @@
+all:
+  children:
+    daedalus:
+      hosts:
+        daedalus-01:
+          ansible_host: 10.10.10.20

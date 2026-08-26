@@ -1,0 +1,11 @@
+---
+- name: Stage AI Forge networking
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  vars_files:
+    - ../../secrets/local.yaml
+
+  roles:
+    - network
