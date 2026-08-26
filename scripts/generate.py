@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import argparse
+import base64
 import shutil
 
 import yaml
@@ -42,6 +43,17 @@ def main():
         encoding="utf-8"
     ).strip()
 
+    boot_control_path = ROOT / "scripts" / "target" / "ai-forge-boot-control"
+
+    if not boot_control_path.is_file():
+        raise RuntimeError(
+            f"AI Forge boot-control helper not found: {boot_control_path}"
+        )
+
+    boot_control_b64 = base64.b64encode(
+        boot_control_path.read_bytes()
+    ).decode("ascii")
+
     profiles = {}
     for profile_name in machine.get("profiles", []):
         profiles[profile_name] = load_yaml(
@@ -60,6 +72,8 @@ def main():
         "password_hash": secrets["password_hash"],
         "os_disk_serial": machine["hardware"]["os_disk"]["udev_serial"],
         "ssh_authorized_key": ssh_authorized_key,
+        "provisioning_mac": machine["network"]["provisioning_mac"],
+        "boot_control_b64": boot_control_b64,
     }
 
     env = Environment(

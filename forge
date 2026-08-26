@@ -8,6 +8,8 @@ if [[ $# -lt 1 ]]; then
     echo "  ./forge machines"
     echo "  ./forge status <machine>"
     echo "  ./forge wake <machine>"
+    echo "  ./forge deploy <machine>"
+    echo "  ./forge boot <machine> {status|pxe-next|clear-next|reboot|poweroff}"
     echo "  ./forge provision <machine>"
     exit 2
 fi
@@ -36,6 +38,22 @@ case "$COMMAND" in
         exec "$ROOT/scripts/wake-machine" "$1"
         ;;
 
+    deploy)
+        if [[ $# -ne 1 ]]; then
+            echo "Usage: ./forge deploy <machine>"
+            exit 2
+        fi
+        exec "$ROOT/scripts/deploy-machine" "$1"
+        ;;
+
+    boot)
+        if [[ $# -ne 2 ]]; then
+            echo "Usage: ./forge boot <machine> {status|pxe-next|clear-next|reboot|poweroff}"
+            exit 2
+        fi
+        exec "$ROOT/scripts/boot-machine" "$1" "$2"
+        ;;
+
     provision)
         if [[ $# -ne 1 ]]; then
             echo "Usage: ./forge provision <machine>"
@@ -51,6 +69,8 @@ case "$COMMAND" in
         echo "  machines"
         echo "  status <machine>"
         echo "  wake <machine>"
+        echo "  deploy <machine>"
+        echo "  boot <machine> {status|pxe-next|clear-next|reboot|poweroff}"
         echo "  provision <machine>"
         exit 2
         ;;

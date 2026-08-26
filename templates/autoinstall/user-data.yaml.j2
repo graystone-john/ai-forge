@@ -1,4 +1,10 @@
 #cloud-config
+
+output:
+  all: ">> /var/log/cloud-init-output.log"
+
+ssh_quiet_keygen: true
+
 autoinstall:
   version: 1
 
@@ -69,3 +75,46 @@ autoinstall:
 
   late-commands:
     - curtin in-target --target=/target -- systemctl enable ssh.service
+
+    - mkdir -p /target/etc/ai-forge
+
+    - |
+      cat > /target/etc/ai-forge/machine.json <<'EOF'
+      {
+        "machine_id": "{{ machine_name }}",
+        "provisioning_mac": "{{ provisioning_mac }}"
+      }
+      EOF
+
+    - chown root:root /target/etc/ai-forge/machine.json
+    - chmod 0644 /target/etc/ai-forge/machine.json
+
+    - |
+      echo '{{ boot_control_b64 }}' | base64 -d > /target/usr/local/sbin/ai-forge-boot-control
+
+    - chown root:root /target/usr/local/sbin/ai-forge-boot-control
+    - chmod 0755 /target/usr/local/sbin/ai-forge-boot-control
+
+    - |
+      cat > /target/etc/sudoers.d/ai-forge-boot-control <<'EOF'
+      {{ username }} ALL=(root) NOPASSWD: /usr/local/sbin/ai-forge-boot-control status
+      {{ username }} ALL=(root) NOPASSWD: /usr/local/sbin/ai-forge-boot-control pxe-next
+      {{ username }} ALL=(root) NOPASSWD: /usr/local/sbin/ai-forge-boot-control clear-next
+      {{ username }} ALL=(root) NOPASSWD: /usr/local/sbin/ai-forge-boot-control reboot
+      {{ username }} ALL=(root) NOPASSWD: /usr/local/sbin/ai-forge-boot-control poweroff
+      EOF
+
+    - chown root:root /target/etc/sudoers.d/ai-forge-boot-control
+    - chmod 0440 /target/etc/sudoers.d/ai-forge-boot-control
+
+    - curtin in-target --target=/target -- visudo -cf /etc/sudoers.d/ai-forge-boot-control
+
+    - |
+      cat > /target/etc/cloud/cloud.cfg.d/99-ai-forge-console.cfg <<'EOF'
+      output:
+        all: ">> /var/log/cloud-init-output.log"
+      ssh_quiet_keygen: true
+      EOF
+
+    - chown root:root /target/etc/cloud/cloud.cfg.d/99-ai-forge-console.cfg
+    - chmod 0644 /target/etc/cloud/cloud.cfg.d/99-ai-forge-console.cfg

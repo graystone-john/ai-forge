@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ $# -ne 2 ]]; then
+    echo "Usage: $0 <machine> {status|pxe-next|clear-next|reboot|poweroff}" >&2
+    exit 2
+fi
+
+MACHINE="$1"
+ACTION="$2"
+
+case "$ACTION" in
+    status|pxe-next|clear-next|reboot|poweroff)
+        ;;
+    *)
+        echo "ERROR: Unknown boot action: $ACTION" >&2
+        echo "Available actions: status, pxe-next, clear-next, reboot, poweroff" >&2
+        exit 2
+        ;;
+esac
+
+MACHINE_FILE="$ROOT/machines/$MACHINE/machine.yaml"
+SSH_KEY="$ROOT/secrets/ssh/id_ed25519_ai_forge"
+
+SSH_USER="$(
+    python3 - "$ROOT/config/forge.yaml" <<'PY'
+import sys
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    forge = yaml.safe_load(f)
+
+print(forge.get("defaults", {}).get("username", ""))
+PY
+)"
+
+if [[ ! -f "$MACHINE_FILE" ]]; then
+    echo "ERROR: Unknown machine: $MACHINE" >&2
+    exit 3
+fi
+
+IP="$(
+    python3 - "$MACHINE_FILE" <<'PY'
+import sys
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    machine = yaml.safe_load(f)
+
+print(machine.get("network", {}).get("provisioning_ip", ""))
+PY
+)"
+
+if [[ -z "$IP" ]]; then
+    echo "ERROR: Missing provisioning_ip for $MACHINE" >&2
+    exit 3
+fi
+
+if [[ -z "$SSH_USER" ]]; then
+    echo "ERROR: Missing defaults.username in config/forge.yaml" >&2
+    exit 3
+fi
+
+if [[ ! -f "$SSH_KEY" ]]; then
+    echo "ERROR: Missing AI Forge SSH key: $SSH_KEY" >&2
+    exit 4
+fi
+
+echo "Machine: $MACHINE"
+echo "IP:      $IP"
+echo "Action:  $ACTION"
+echo
+
+ssh \
+    -i "$SSH_KEY" \
+    "$SSH_USER@$IP" \
+    "sudo -n /usr/local/sbin/ai-forge-boot-control $ACTION"

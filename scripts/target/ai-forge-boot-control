@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+CONFIG = Path("/etc/ai-forge/machine.json")
+EFIBOOTMGR = "/usr/bin/efibootmgr"
+SYSTEMCTL = "/usr/bin/systemctl"
+
+BOOT_ENTRY_RE = re.compile(r"^Boot([0-9A-Fa-f]{4})\*?\s+(.*)$")
+BOOT_NEXT_RE = re.compile(r"^BootNext:\s*([0-9A-Fa-f]{4})\s*$")
+MAC_RE = re.compile(r"MAC\(([0-9A-Fa-f]{12}),[^)]*\)", re.IGNORECASE)
+
+
+class BootControlError(RuntimeError):
+    pass
+
+
+def normalize_mac(value: str) -> str:
+    compact = re.sub(r"[^0-9A-Fa-f]", "", value).lower()
+
+    if len(compact) != 12:
+        raise BootControlError(f"invalid provisioning MAC: {value!r}")
+
+    return compact
+
+
+def load_config():
+    try:
+        data = json.loads(CONFIG.read_text())
+    except FileNotFoundError:
+        raise BootControlError(f"configuration not found: {CONFIG}")
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BootControlError(f"cannot read {CONFIG}: {exc}")
+
+    machine_id = data.get("machine_id")
+    provisioning_mac = data.get("provisioning_mac")
+
+    if not machine_id:
+        raise BootControlError("machine_id missing from configuration")
+
+    if not provisioning_mac:
+        raise BootControlError("provisioning_mac missing from configuration")
+
+    return machine_id, normalize_mac(provisioning_mac)
+
+
+def run_efibootmgr(*args):
+    result = subprocess.run(
+        [EFIBOOTMGR, *args],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise BootControlError(
+            f"efibootmgr failed: {result.stderr.strip()}"
+        )
+
+    return result.stdout
+
+
+def read_efi_state():
+    return run_efibootmgr("--verbose")
+
+
+def find_pxe_entry(provisioning_mac):
+    output = read_efi_state()
+    matches = []
+
+    for line in output.splitlines():
+        boot_match = BOOT_ENTRY_RE.match(line)
+
+        if not boot_match:
+            continue
+
+        bootnum = boot_match.group(1).upper()
+        description = boot_match.group(2)
+
+        mac_match = MAC_RE.search(description)
+
+        if not mac_match:
+            continue
+
+        entry_mac = mac_match.group(1).lower()
+
+        if entry_mac == provisioning_mac:
+            matches.append((bootnum, line))
+
+    if len(matches) == 0:
+        raise BootControlError(
+            "no UEFI boot entry matches the registered provisioning MAC"
+        )
+
+    if len(matches) > 1:
+        raise BootControlError(
+            "multiple UEFI boot entries match the registered provisioning MAC"
+        )
+
+    return matches[0]
+
+
+def get_bootnext():
+    output = read_efi_state()
+
+    for line in output.splitlines():
+        match = BOOT_NEXT_RE.match(line)
+
+        if match:
+            return match.group(1).upper()
+
+    return None
+
+
+def status():
+    machine_id, provisioning_mac = load_config()
+    bootnum, description = find_pxe_entry(provisioning_mac)
+    bootnext = get_bootnext()
+
+    print(f"machine: {machine_id}")
+    print(f"provisioning-mac: {provisioning_mac}")
+    print(f"pxe-entry: Boot{bootnum}")
+    print(f"pxe-description: {description}")
+    print(
+        f"bootnext: {('Boot' + bootnext) if bootnext else 'not set'}"
+    )
+
+
+def pxe_next():
+    machine_id, provisioning_mac = load_config()
+    bootnum, description = find_pxe_entry(provisioning_mac)
+
+    print(f"machine: {machine_id}")
+    print(f"matched: {description}")
+    print(f"setting BootNext to Boot{bootnum}")
+
+    run_efibootmgr("--bootnext", bootnum)
+
+    bootnext = get_bootnext()
+
+    if bootnext != bootnum:
+        raise BootControlError(
+            f"BootNext verification failed: expected Boot{bootnum}, "
+            f"found {('Boot' + bootnext) if bootnext else 'nothing'}"
+        )
+
+    print(f"BootNext verified: Boot{bootnum}")
+
+
+def clear_next():
+    machine_id, provisioning_mac = load_config()
+    pxe_bootnum, _ = find_pxe_entry(provisioning_mac)
+    bootnext = get_bootnext()
+
+    if bootnext is None:
+        print("BootNext is already not set")
+        return
+
+    if bootnext != pxe_bootnum:
+        raise BootControlError(
+            f"BootNext is Boot{bootnext}, not AI Forge PXE entry "
+            f"Boot{pxe_bootnum}; refusing to clear it"
+        )
+
+    print(f"machine: {machine_id}")
+    print(f"clearing AI Forge PXE BootNext: Boot{bootnext}")
+
+    run_efibootmgr("--delete-bootnext")
+
+    bootnext = get_bootnext()
+
+    if bootnext is not None:
+        raise BootControlError(
+            f"BootNext clear verification failed: still Boot{bootnext}"
+        )
+
+    print("BootNext cleared")
+
+
+def reboot():
+    load_config()
+    subprocess.run(
+        [SYSTEMCTL, "--no-block", "reboot"],
+        check=True,
+    )
+
+
+def poweroff():
+    load_config()
+    subprocess.run(
+        [SYSTEMCTL, "--no-block", "poweroff"],
+        check=True,
+    )
+
+
+def usage():
+    print(
+        "usage: ai-forge-boot-control "
+        "{status|pxe-next|clear-next|reboot|poweroff}",
+        file=sys.stderr,
+    )
+
+
+def main():
+    if len(sys.argv) != 2:
+        usage()
+        return 2
+
+    command = sys.argv[1]
+
+    try:
+        if command == "status":
+            status()
+        elif command == "pxe-next":
+            pxe_next()
+        elif command == "clear-next":
+            clear_next()
+        elif command == "reboot":
+            reboot()
+        elif command == "poweroff":
+            poweroff()
+        else:
+            usage()
+            return 2
+
+    except BootControlError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    except subprocess.CalledProcessError as exc:
+        print(
+            f"ERROR: command failed with status {exc.returncode}",
+            file=sys.stderr,
+        )
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
