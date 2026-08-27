@@ -1,7 +1,9 @@
 ai_forge_machine: daedalus-01
+inference_profile: muse-glimmer-30b
 
 provisioning:
   interface: enp5s0
   ip: 10.10.10.20
   subnet: 10.10.10.0/24
   mac: "f0:2f:74:d3:34:d2"
+

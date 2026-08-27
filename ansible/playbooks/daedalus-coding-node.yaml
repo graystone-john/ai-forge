@@ -6,6 +6,7 @@
 
   vars_files:
     - ../../secrets/local.yaml
+    - "../profiles/inference/{{ inference_profile }}.yaml"
 
   roles:
     - daedalus-base
