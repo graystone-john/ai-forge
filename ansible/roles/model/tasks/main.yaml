@@ -12,7 +12,7 @@
     group: root
     mode: "0755"
 
-- name: Copy selected model from Athena
+- name: Copy selected model from AI Forge artifact cache
   ansible.posix.synchronize:
     src: "{{ model_src }}/"
     dest: "{{ model_dst }}/"

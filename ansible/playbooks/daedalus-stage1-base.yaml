@@ -1,5 +1,5 @@
 ---
-- name: Configure AI Forge agent-node base and GPU
+- name: Configure AI Node base and GPU
   hosts: daedalus
   gather_facts: true
   become: true

@@ -1,5 +1,5 @@
 ---
-- name: AI Forge Daedalus preflight
+- name: AI Node preflight
   hosts: daedalus
   gather_facts: true
 

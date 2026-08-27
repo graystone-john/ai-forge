@@ -14,7 +14,7 @@
     group: root
     mode: "0755"
 
-- name: Copy llama.cpp binary from Athena
+- name: Copy llama.cpp binary from AI Forge artifact cache
   ansible.posix.synchronize:
     src: "{{ llama_src }}"
     dest: "{{ ai_forge_bin }}/llama"

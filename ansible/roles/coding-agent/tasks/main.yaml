@@ -24,7 +24,7 @@
     - "{{ python_venv_dst }}"
     - "/opt/ai-forge/venvs"
 
-- name: Copy Aider offline wheelhouse from Athena
+- name: Copy Aider offline wheelhouse from AI Forge artifact cache
   ansible.posix.synchronize:
     src: "{{ aider_src }}/"
     dest: "{{ aider_cache_dst }}/"
@@ -40,7 +40,7 @@
   delegate_to: localhost
   become: false
 
-- name: Copy Python venv package bundle from Athena
+- name: Copy Python venv package bundle from AI Forge artifact cache
   ansible.posix.synchronize:
     src: "{{ python_venv_src }}/"
     dest: "{{ python_venv_dst }}/"
