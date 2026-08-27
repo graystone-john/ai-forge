@@ -1,9 +1,0 @@
----
-- name: Configure NVIDIA acceleration
-  hosts: daedalus
-  gather_facts: true
-  become: true
-
-  roles:
-    - kernel-policy
-    - nvidia-offline

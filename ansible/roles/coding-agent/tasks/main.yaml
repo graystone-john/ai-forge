@@ -36,6 +36,7 @@
       - "--chown=root:root"
       - "--no-perms"
       - "--no-times"
+      - "--info=progress2"
   delegate_to: localhost
   become: false
 
@@ -51,6 +52,7 @@
       - "--chown=root:root"
       - "--no-perms"
       - "--no-times"
+      - "--info=progress2"
   delegate_to: localhost
   become: false
 

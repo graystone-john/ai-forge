@@ -1,5 +1,5 @@
 ---
-- name: Configure Daedalus model and inference runtime
+- name: Configure AI Node inference stack
   hosts: daedalus
   gather_facts: true
   become: true
@@ -7,6 +7,16 @@
   vars_files:
     - "../profiles/inference/{{ inference_profile }}.yaml"
 
+  pre_tasks:
+    - name: Report AI Forge stage start
+      ansible.builtin.debug:
+        msg: "AI_FORGE_STAGE_START stage=3 name=inference machine={{ inventory_hostname }}"
+
   roles:
     - model
     - llama-runtime
+
+  post_tasks:
+    - name: Report AI Forge stage complete
+      ansible.builtin.debug:
+        msg: "AI_FORGE_STAGE_COMPLETE stage=3 name=inference machine={{ inventory_hostname }}"

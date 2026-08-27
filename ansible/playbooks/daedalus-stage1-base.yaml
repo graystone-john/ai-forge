@@ -1,5 +1,5 @@
 ---
-- name: Configure Daedalus base and NVIDIA
+- name: Configure AI Forge agent-node base and GPU
   hosts: daedalus
   gather_facts: true
   become: true
@@ -7,9 +7,19 @@
   vars_files:
     - ../../secrets/local.yaml
 
+  pre_tasks:
+    - name: Report AI Forge stage start
+      ansible.builtin.debug:
+        msg: "AI_FORGE_STAGE_START stage=1 name=base-gpu machine={{ inventory_hostname }}"
+
   roles:
     - daedalus-base
     - kernel-policy
     - network
     - utilities
     - nvidia-offline
+
+  post_tasks:
+    - name: Report AI Forge stage complete
+      ansible.builtin.debug:
+        msg: "AI_FORGE_STAGE_COMPLETE stage=1 name=base-gpu machine={{ inventory_hostname }}"
