@@ -72,19 +72,11 @@
   failed_when: false
 
 - name: Install Python venv support from offline package bundle
-  ansible.builtin.command:
-    argv:
-      - dpkg
-      - -i
-      - "{{ python_venv_dst }}/packages/libpython3.12-minimal_3.12.3-1ubuntu0.16_amd64.deb"
-      - "{{ python_venv_dst }}/packages/libpython3.12-stdlib_3.12.3-1ubuntu0.16_amd64.deb"
-      - "{{ python_venv_dst }}/packages/libpython3.12t64_3.12.3-1ubuntu0.16_amd64.deb"
-      - "{{ python_venv_dst }}/packages/python3.12_3.12.3-1ubuntu0.16_amd64.deb"
-      - "{{ python_venv_dst }}/packages/python3.12-minimal_3.12.3-1ubuntu0.16_amd64.deb"
-      - "{{ python_venv_dst }}/packages/python3-pip-whl_24.0+dfsg-1ubuntu1.3_all.deb"
-      - "{{ python_venv_dst }}/packages/python3-setuptools-whl_68.1.2-2ubuntu1.2_all.deb"
-      - "{{ python_venv_dst }}/packages/python3.12-venv_3.12.3-1ubuntu0.16_amd64.deb"
-      - "{{ python_venv_dst }}/packages/python3-venv_3.12.3-0ubuntu2.1_amd64.deb"
+  ansible.builtin.shell: |
+    set -euo pipefail
+    dpkg -i "{{ python_venv_dst }}"/packages/*.deb
+  args:
+    executable: /bin/bash
   when: "'install ok installed' not in venv_package_status.stdout"
 
 - name: Check existing Aider virtual environment

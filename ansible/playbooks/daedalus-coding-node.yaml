@@ -16,4 +16,6 @@
     - model
     - llama-runtime
     - coding-agent
-    - validate-coding-node
+
+    - role: validate-coding-node
+      when: ai_forge_run_validation | default(true) | bool
