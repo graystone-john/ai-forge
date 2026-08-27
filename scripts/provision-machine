@@ -123,3 +123,7 @@ ARMED=0
 echo
 echo "Provision request sent."
 echo "The controller should consume PROVISION and return mode to NORMAL."
+echo
+echo "Wait for the rebuilt AI Node with:"
+echo "  ./forge wait $MACHINE --for ssh --timeout 1200"
+

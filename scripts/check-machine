@@ -66,18 +66,35 @@ fi
 #
 # SSH authentication is the authoritative READY test.
 #
+SSH_ERROR="$(mktemp)"
+trap 'rm -f "$SSH_ERROR"' EXIT
+
 if ssh \
     -o BatchMode=yes \
     -o ConnectTimeout=3 \
     -o StrictHostKeyChecking=accept-new \
     -i "$SSH_KEY" \
-    "$SSH_USER@$IP" true >/dev/null 2>&1; then
+    "$SSH_USER@$IP" true \
+    >/dev/null 2>"$SSH_ERROR"; then
 
     echo "SSH:     ready"
     echo "State:   ready"
     exit 0
 fi
 
+if grep -Eq \
+    'REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed' \
+    "$SSH_ERROR"; then
+
+    echo "SSH:     host key mismatch"
+    echo "State:   host key changed"
+    echo
+    echo "Recovery:"
+    echo "  ssh-keygen -f ~/.ssh/known_hosts -R $IP"
+    exit 13
+fi
+
 echo "SSH:     not ready"
 echo "State:   booting/unavailable"
 exit 12
+

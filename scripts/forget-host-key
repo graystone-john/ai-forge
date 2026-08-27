@@ -16,7 +16,7 @@ if [[ ! -f "$MACHINE_FILE" ]]; then
     exit 3
 fi
 
-IP="$(
+readarray -t INFO < <(
     python3 - "$MACHINE_FILE" <<'PY'
 import sys
 import yaml
@@ -24,21 +24,37 @@ import yaml
 with open(sys.argv[1], encoding="utf-8") as f:
     machine = yaml.safe_load(f)
 
-print(machine.get("network", {}).get("provisioning_ip", ""))
+network = machine.get("network", {})
+
+print(network.get("provisioning_ip", ""))
+print(machine.get("name", ""))
 PY
-)"
+)
+
+IP="${INFO[0]}"
+HOSTNAME="${INFO[1]}"
 
 if [[ -z "$IP" ]]; then
     echo "ERROR: No provisioning_ip configured for $MACHINE" >&2
     exit 3
 fi
 
-echo "Machine: $MACHINE"
-echo "IP:      $IP"
+echo "Machine:  $MACHINE"
+echo "IP:       $IP"
+echo "Hostname: ${HOSTNAME:-unknown}"
 
-if ssh-keygen -F "$IP" >/dev/null 2>&1; then
-    echo "Removing previous SSH host key..."
-    ssh-keygen -R "$IP"
-else
-    echo "No previous SSH host key recorded."
-fi
+remove_host_key() {
+    local target="$1"
+
+    [[ -n "$target" ]] || return 0
+
+    if ssh-keygen -F "$target" >/dev/null 2>&1; then
+        echo "Removing previous SSH host key for $target..."
+        ssh-keygen -R "$target"
+    else
+        echo "No previous SSH host key recorded for $target."
+    fi
+}
+
+remove_host_key "$IP"
+remove_host_key "$HOSTNAME"

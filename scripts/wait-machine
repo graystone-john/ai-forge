@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+    echo "Usage: $0 <machine> [--for ssh|offline] [--timeout seconds] [--interval seconds]"
+    exit 2
+}
+
+if [[ $# -lt 1 ]]; then
+    usage
+fi
+
+MACHINE="$1"
+shift
+
+WAIT_FOR="ssh"
+TIMEOUT=300
+INTERVAL=5
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --for)
+            [[ $# -ge 2 ]] || usage
+            WAIT_FOR="$2"
+            shift 2
+            ;;
+        --timeout)
+            [[ $# -ge 2 ]] || usage
+            TIMEOUT="$2"
+            shift 2
+            ;;
+        --interval)
+            [[ $# -ge 2 ]] || usage
+            INTERVAL="$2"
+            shift 2
+            ;;
+        *)
+            echo "ERROR: Unknown option: $1" >&2
+            usage
+            ;;
+    esac
+done
+
+case "$WAIT_FOR" in
+    ssh|offline)
+        ;;
+    *)
+        echo "ERROR: Unsupported wait condition: $WAIT_FOR" >&2
+        exit 2
+        ;;
+esac
+
+if ! [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || (( TIMEOUT <= 0 )); then
+    echo "ERROR: --timeout must be a positive integer" >&2
+    exit 2
+fi
+
+if ! [[ "$INTERVAL" =~ ^[0-9]+$ ]] || (( INTERVAL <= 0 )); then
+    echo "ERROR: --interval must be a positive integer" >&2
+    exit 2
+fi
+
+MACHINE_FILE="$ROOT/machines/$MACHINE/machine.yaml"
+
+if [[ ! -f "$MACHINE_FILE" ]]; then
+    echo "ERROR: Unknown machine: $MACHINE" >&2
+    exit 3
+fi
+
+IP="$(
+    python3 - "$MACHINE_FILE" <<'PY'
+import sys
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    machine = yaml.safe_load(f)
+
+print(machine.get("network", {}).get("provisioning_ip", ""))
+PY
+)"
+
+if [[ -z "$IP" ]]; then
+    echo "ERROR: No provisioning_ip configured for $MACHINE" >&2
+    exit 3
+fi
+
+echo "Machine:     $MACHINE"
+echo "IP:          $IP"
+echo "Waiting for: $WAIT_FOR"
+echo "Timeout:     ${TIMEOUT}s"
+echo "Interval:    ${INTERVAL}s"
+echo
+
+START="$(date +%s)"
+
+while true; do
+    NOW="$(date +%s)"
+    ELAPSED=$((NOW - START))
+
+    if (( ELAPSED >= TIMEOUT )); then
+        echo
+        echo "TIMEOUT: $MACHINE did not reach '$WAIT_FOR' within ${TIMEOUT}s" >&2
+        exit 20
+    fi
+
+    case "$WAIT_FOR" in
+        ssh)
+            set +e
+            "$ROOT/scripts/check-machine" "$MACHINE" >/dev/null 2>&1
+            CHECK_RC=$?
+            set -e
+
+            if [[ $CHECK_RC -eq 0 ]]; then
+                printf '[%3ss] SSH ready\n' "$ELAPSED"
+                echo
+                echo "Ready: $MACHINE"
+                exit 0
+            fi
+
+            if [[ $CHECK_RC -eq 13 ]]; then
+                printf '[%3ss] SSH host key mismatch\n' "$ELAPSED"
+                echo
+                echo "ERROR: SSH host key changed for $MACHINE ($IP)" >&2
+                echo "Run:" >&2
+                echo "  ssh-keygen -f ~/.ssh/known_hosts -R $IP" >&2
+                exit 13
+            fi
+
+            if ping -c 1 -W 1 "$IP" >/dev/null 2>&1; then
+                printf '[%3ss] network reachable, SSH not ready\n' "$ELAPSED"
+            else
+                printf '[%3ss] network unreachable\n' "$ELAPSED"
+            fi
+            ;;
+
+        offline)
+            if ! ping -c 1 -W 1 "$IP" >/dev/null 2>&1; then
+                printf '[%3ss] machine offline\n' "$ELAPSED"
+                echo
+                echo "Offline: $MACHINE"
+                exit 0
+            fi
+
+            printf '[%3ss] machine still reachable\n' "$ELAPSED"
+            ;;
+    esac
+
+    sleep "$INTERVAL"
+done
