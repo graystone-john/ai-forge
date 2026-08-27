@@ -1,0 +1,15 @@
+---
+- name: Configure Daedalus base and NVIDIA
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  vars_files:
+    - ../../secrets/local.yaml
+
+  roles:
+    - daedalus-base
+    - kernel-policy
+    - network
+    - utilities
+    - nvidia-offline

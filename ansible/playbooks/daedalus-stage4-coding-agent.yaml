@@ -1,0 +1,11 @@
+---
+- name: Configure Daedalus coding agent
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  vars_files:
+    - "../profiles/inference/{{ inference_profile }}.yaml"
+
+  roles:
+    - coding-agent

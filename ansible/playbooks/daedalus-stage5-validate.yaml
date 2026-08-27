@@ -1,0 +1,11 @@
+---
+- name: Validate Daedalus coding node
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  vars_files:
+    - "../profiles/inference/{{ inference_profile }}.yaml"
+
+  roles:
+    - validate-coding-node

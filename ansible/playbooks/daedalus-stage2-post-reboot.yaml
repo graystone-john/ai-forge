@@ -1,0 +1,23 @@
+---
+- name: Verify Daedalus after NVIDIA reboot
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: Require approved kernel after reboot
+      ansible.builtin.assert:
+        that:
+          - ansible_kernel == daedalus_kernel.version
+
+    - name: Require NVIDIA GPU after reboot
+      ansible.builtin.command:
+        cmd: nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+      register: active_nvidia
+      changed_when: false
+
+    - name: Report post-reboot state
+      ansible.builtin.debug:
+        msg:
+          - "Kernel: {{ ansible_kernel }}"
+          - "GPU: {{ active_nvidia.stdout }}"

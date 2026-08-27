@@ -8,6 +8,8 @@ Type=simple
 User=nispoe
 Group=nispoe
 
+ExecStartPre=/bin/bash -c 'for i in {1..60}; do /usr/bin/nvidia-smi >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1'
+
 ExecStart=/opt/ai-forge/bin/llama serve \
   --model /opt/ai-forge/models/{{ model.directory }}/{{ model.model_file }} \
   --alias {{ model.id }} \
