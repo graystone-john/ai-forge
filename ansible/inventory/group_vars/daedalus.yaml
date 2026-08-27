@@ -3,3 +3,10 @@ ansible_python_interpreter: /usr/bin/python3
 
 ai_forge_family: daedalus
 ai_forge_role: local-ai-coding-node
+
+daedalus_kernel:
+  version: "6.8.0-100-generic"
+
+daedalus_nvidia:
+  driver_version: "595.84"
+  bundle_name: "nvidia-595-kernel-6.8.0-100"

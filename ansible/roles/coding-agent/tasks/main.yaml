@@ -1,13 +1,13 @@
 ---
 - name: Define coding-agent artifact paths
   ansible.builtin.set_fact:
-    aider_src: "/home/nispoe/graystone/provisioning-data/python/aider-0.86.2"
-    python_venv_src: "/home/nispoe/graystone/provisioning-data/packages/python-venv-3.12"
+    aider_src: "{{ coding_agent.source }}"
+    python_venv_src: "{{ coding_agent.python_venv_source }}"
 
     ai_forge_root: "/opt/ai-forge"
-    aider_cache_dst: "/opt/ai-forge/python/aider-0.86.2"
+    aider_cache_dst: "/opt/ai-forge/python/aider-{{ coding_agent.aider_version }}"
     python_venv_dst: "/opt/ai-forge/packages/python-venv-3.12"
-    aider_venv: "/opt/ai-forge/venvs/aider-0.86.2"
+    aider_venv: "/opt/ai-forge/venvs/aider-{{ coding_agent.aider_version }}"
 
 - name: Create AI Forge coding-agent directories
   ansible.builtin.file:
@@ -28,9 +28,14 @@
   ansible.posix.synchronize:
     src: "{{ aider_src }}/"
     dest: "{{ aider_cache_dst }}/"
-    archive: true
+    archive: false
+    recursive: true
     checksum: true
     rsync_path: "sudo -n rsync"
+    rsync_opts:
+      - "--chown=root:root"
+      - "--no-perms"
+      - "--no-times"
   delegate_to: localhost
   become: false
 
@@ -38,9 +43,14 @@
   ansible.posix.synchronize:
     src: "{{ python_venv_src }}/"
     dest: "{{ python_venv_dst }}/"
-    archive: true
+    archive: false
+    recursive: true
     checksum: true
     rsync_path: "sudo -n rsync"
+    rsync_opts:
+      - "--chown=root:root"
+      - "--no-perms"
+      - "--no-times"
   delegate_to: localhost
   become: false
 
@@ -121,11 +131,11 @@
   register: aider_version
   changed_when: false
 
-- name: Require Aider 0.86.2
+- name: Require configured Aider version
   ansible.builtin.assert:
     that:
-      - "'aider 0.86.2' in aider_version.stdout"
-    fail_msg: "Unexpected Aider version"
+      - "'aider ' ~ coding_agent.aider_version in aider_version.stdout"
+    fail_msg: "Unexpected Aider version; expected {{ coding_agent.aider_version }}"
 
 - name: Report coding-agent state
   ansible.builtin.debug:

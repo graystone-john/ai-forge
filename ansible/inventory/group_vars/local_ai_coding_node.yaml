@@ -1,0 +1,23 @@
+inference:
+  runtime: llama
+  service_name: ai-forge-inference
+  host: 127.0.0.1
+  port: 8080
+  context_size: 32768
+
+llama_runtime:
+  source: "/home/nispoe/graystone/provisioning-data/software/llama.cpp/llama"
+  checksum: "7d692bc72fcb179b81e15c3ea5a20495230ce269ab5016d0a340f9864591cfd6"
+
+model:
+  id: muse-glimmer-30b
+  directory: muse-glimmer-30b-q4_k_m
+  model_file: model.gguf
+  projector_file: mmproj.gguf
+  checksum: "4cc57c0f51040a226e5a72cc47b7613f7772950e460a665f7083de89f183f60e"
+  projector_checksum: "f48b452316f9b213758e8659444029b961a24a07f99a1abb2a9f88b06f7c00c6"
+
+coding_agent:
+  aider_version: "0.86.2"
+  source: "/home/nispoe/graystone/provisioning-data/python/aider-0.86.2"
+  python_venv_source: "/home/nispoe/graystone/provisioning-data/packages/python-venv-3.12"

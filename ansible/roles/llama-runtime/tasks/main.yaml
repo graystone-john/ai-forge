@@ -1,8 +1,10 @@
 ---
 - name: Define llama.cpp paths
   ansible.builtin.set_fact:
-    llama_src: "/home/nispoe/graystone/provisioning-data/software/llama.cpp/llama"
+    llama_src: "{{ llama_runtime.source }}"
     ai_forge_bin: "/opt/ai-forge/bin"
+    model_dst: "/opt/ai-forge/models/{{ model.directory }}"
+    inference_service_unit: "{{ inference.service_name }}.service"
 
 - name: Create AI Forge binary directory
   ansible.builtin.file:
@@ -16,8 +18,14 @@
   ansible.posix.synchronize:
     src: "{{ llama_src }}"
     dest: "{{ ai_forge_bin }}/llama"
+    archive: false
+    recursive: false
     checksum: true
     rsync_path: "sudo -n rsync"
+    rsync_opts:
+      - "--chown=root:root"
+      - "--no-perms"
+      - "--no-times"
   delegate_to: localhost
   become: false
 
@@ -37,7 +45,7 @@
 - name: Require expected llama.cpp checksum
   ansible.builtin.assert:
     that:
-      - "'7d692bc72fcb179b81e15c3ea5a20495230ce269ab5016d0a340f9864591cfd6' in llama_checksum.stdout"
+      - llama_runtime.checksum in llama_checksum.stdout
     fail_msg: "llama.cpp binary checksum mismatch"
 
 - name: Link llama.cpp into system PATH
@@ -47,43 +55,55 @@
     state: link
     force: true
 
-- name: Install Muse inference systemd service
+- name: Install inference systemd service
   ansible.builtin.template:
-    src: ai-forge-muse.service.j2
-    dest: /etc/systemd/system/ai-forge-muse.service
+    src: ai-forge-inference.service.j2
+    dest: "/etc/systemd/system/{{ inference_service_unit }}"
     owner: root
     group: root
     mode: "0644"
-  register: muse_service_unit
+  register: inference_service_template
 
-- name: Reload systemd for Muse service
+- name: Reload systemd for inference service
   ansible.builtin.systemd:
     daemon_reload: true
-  when: muse_service_unit.changed
+  when: inference_service_template.changed
 
-- name: Enable and start Muse inference service
+- name: Restart inference service after unit change
   ansible.builtin.systemd:
-    name: ai-forge-muse.service
+    name: "{{ inference_service_unit }}"
+    state: restarted
+  when: inference_service_template.changed
+
+- name: Enable and start inference service
+  ansible.builtin.systemd:
+    name: "{{ inference_service_unit }}"
     enabled: true
     state: started
 
-- name: Wait for Muse HTTP port
+- name: Wait for inference HTTP port
   ansible.builtin.wait_for:
-    host: 127.0.0.1
-    port: 8080
+    host: "{{ inference.host }}"
+    port: "{{ inference.port }}"
     timeout: 180
 
-- name: Wait for Muse model to become ready
+- name: Wait for selected model to become ready
   ansible.builtin.uri:
-    url: http://127.0.0.1:8080/v1/models
+    url: "http://{{ inference.host }}:{{ inference.port }}/v1/models"
     method: GET
     return_content: true
     status_code: 200
-  register: muse_models
+  register: inference_models
   retries: 60
   delay: 5
-  until: muse_models.status == 200
+  until: inference_models.status == 200
 
-- name: Report Muse API
+- name: Require selected model in inference API
+  ansible.builtin.assert:
+    that:
+      - model.id in (inference_models.content | string)
+    fail_msg: "Selected model {{ model.id }} is not exposed by inference API"
+
+- name: Report inference API
   ansible.builtin.debug:
-    msg: "{{ muse_models.json | default(muse_models.content) }}"
+    msg: "{{ inference_models.json | default(inference_models.content) }}"

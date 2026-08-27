@@ -1,0 +1,26 @@
+[Unit]
+Description=AI Forge llama.cpp inference server - {{ model.id }}
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=nispoe
+Group=nispoe
+
+ExecStart=/opt/ai-forge/bin/llama serve \
+  --model /opt/ai-forge/models/{{ model.directory }}/{{ model.model_file }} \
+  --alias {{ model.id }} \
+  --ctx-size {{ inference.context_size }} \
+  --gpu-layers all \
+  --parallel 1 \
+  --host {{ inference.host }} \
+  --port {{ inference.port }}
+
+Restart=on-failure
+RestartSec=5
+
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

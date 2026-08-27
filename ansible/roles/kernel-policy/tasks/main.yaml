@@ -2,8 +2,8 @@
 - name: Require approved Daedalus kernel
   ansible.builtin.assert:
     that:
-      - ansible_kernel == "6.8.0-100-generic"
-    fail_msg: "Unexpected kernel {{ ansible_kernel }}; expected 6.8.0-100-generic"
+      - ansible_kernel == daedalus_kernel.version
+    fail_msg: "Unexpected kernel {{ ansible_kernel }}; expected {{ daedalus_kernel.version }}"
 
 - name: Hold kernel meta packages
   ansible.builtin.dpkg_selections:
@@ -16,10 +16,10 @@
 
 - name: Verify Intel Ethernet module exists
   ansible.builtin.command:
-    cmd: modinfo -k 6.8.0-100-generic igc
+    cmd: modinfo -k "{{ daedalus_kernel.version }}" igc
   changed_when: false
 
 - name: Verify Intel Wi-Fi module exists
   ansible.builtin.command:
-    cmd: modinfo -k 6.8.0-100-generic iwlwifi
+    cmd: modinfo -k "{{ daedalus_kernel.version }}" iwlwifi
   changed_when: false

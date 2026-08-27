@@ -2,8 +2,8 @@
 - name: Verify approved kernel
   ansible.builtin.assert:
     that:
-      - ansible_kernel == "6.8.0-100-generic"
-    fail_msg: "Unexpected kernel: {{ ansible_kernel }}"
+      - ansible_kernel == daedalus_kernel.version
+    fail_msg: "Unexpected kernel: {{ ansible_kernel }}; expected {{ daedalus_kernel.version }}"
 
 - name: Verify NVIDIA GPU
   ansible.builtin.command:
@@ -13,7 +13,7 @@
 
 - name: Verify inference service is active
   ansible.builtin.command:
-    cmd: systemctl is-active ai-forge-muse.service
+    cmd: systemctl is-active {{ inference.service_name }}.service
   register: validation_service
   changed_when: false
 
@@ -24,7 +24,7 @@
 
 - name: Verify OpenAI models endpoint
   ansible.builtin.uri:
-    url: http://127.0.0.1:8080/v1/models
+    url: "http://{{ inference.host }}:{{ inference.port }}/v1/models"
     method: GET
     return_content: true
     status_code: 200
@@ -32,11 +32,11 @@
 
 - name: Verify chat completion
   ansible.builtin.uri:
-    url: http://127.0.0.1:8080/v1/chat/completions
+    url: "http://{{ inference.host }}:{{ inference.port }}/v1/chat/completions"
     method: POST
     body_format: json
     body:
-      model: muse-glimmer-30b
+      model: "{{ model.id }}"
       messages:
         - role: user
           content: "Reply with exactly: AI_FORGE_OK"
@@ -113,8 +113,10 @@
     msg:
       - "Kernel: {{ ansible_kernel }}"
       - "GPU: {{ validation_nvidia.stdout }}"
-      - "Inference service: active"
+      - "Inference service: {{ inference.service_name }} active"
+      - "Model: {{ model.id }}"
       - "OpenAI-compatible API: working"
       - "Chat completion: working"
       - "Aider coding edit: working"
-      - "Daedalus coding node: VALIDATED"
+      - "Coding node: VALIDATED"
+
