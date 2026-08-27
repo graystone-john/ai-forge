@@ -1,0 +1,68 @@
+---
+- name: Define NVIDIA offline bundle paths
+  ansible.builtin.set_fact:
+    nvidia_bundle_src: "/home/nispoe/graystone/provisioning-data/packages/nvidia-595-kernel-6.8.0-100"
+    nvidia_bundle_dst: "/opt/ai-forge/packages/nvidia-595-kernel-6.8.0-100"
+
+- name: Require approved kernel before NVIDIA install
+  ansible.builtin.assert:
+    that:
+      - ansible_kernel == "6.8.0-100-generic"
+    fail_msg: "NVIDIA offline role requires 6.8.0-100-generic"
+
+- name: Create offline package directory
+  ansible.builtin.file:
+    path: "{{ nvidia_bundle_dst }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy NVIDIA offline bundle to target
+  ansible.posix.synchronize:
+    src: "{{ nvidia_bundle_src }}/"
+    dest: "{{ nvidia_bundle_dst }}/"
+    archive: true
+    checksum: true
+    rsync_path: "sudo -n rsync"
+  delegate_to: localhost
+  become: false
+
+- name: Verify NVIDIA package bundle checksums
+  ansible.builtin.command:
+    cmd: sha256sum -c ../meta/SHA256SUMS
+    chdir: "{{ nvidia_bundle_dst }}/packages"
+  changed_when: false
+
+- name: Check existing NVIDIA DKMS state
+  ansible.builtin.command:
+    cmd: dkms status
+  register: existing_dkms_status
+  changed_when: false
+  failed_when: false
+
+- name: Install offline NVIDIA package set
+  ansible.builtin.shell: |
+    set -euo pipefail
+    apt-get install -y ./packages/*.deb
+  args:
+    chdir: "{{ nvidia_bundle_dst }}"
+    executable: /bin/bash
+  when: "'nvidia/595.84, 6.8.0-100-generic' not in existing_dkms_status.stdout"
+
+- name: Verify DKMS built NVIDIA for approved kernel
+  ansible.builtin.command:
+    cmd: dkms status
+  register: dkms_status
+  changed_when: false
+
+- name: Require NVIDIA DKMS module for approved kernel
+  ansible.builtin.assert:
+    that:
+      - "'nvidia/595.84, 6.8.0-100-generic' in dkms_status.stdout"
+    fail_msg: "NVIDIA DKMS module was not built for 6.8.0-100-generic"
+
+- name: Verify NVIDIA kernel module
+  ansible.builtin.command:
+    cmd: modinfo -k 6.8.0-100-generic nvidia
+  changed_when: false

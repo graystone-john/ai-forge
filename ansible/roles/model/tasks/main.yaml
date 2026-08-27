@@ -1,0 +1,54 @@
+---
+- name: Define selected model paths
+  ansible.builtin.set_fact:
+    model_src: "/home/nispoe/graystone/provisioning-data/models/muse-glimmer-30b-q4_k_m"
+    model_dst: "/opt/ai-forge/models/muse-glimmer-30b-q4_k_m"
+
+- name: Create model directory
+  ansible.builtin.file:
+    path: "{{ model_dst }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy selected model from Athena
+  ansible.posix.synchronize:
+    src: "{{ model_src }}/"
+    dest: "{{ model_dst }}/"
+    archive: true
+    checksum: true
+    rsync_path: "sudo -n rsync"
+  delegate_to: localhost
+  become: false
+
+- name: Set model ownership
+  ansible.builtin.file:
+    path: "{{ model_dst }}"
+    owner: root
+    group: root
+    recurse: true
+
+- name: Verify model checksum
+  ansible.builtin.command:
+    cmd: sha256sum "{{ model_dst }}/model.gguf"
+  register: model_checksum
+  changed_when: false
+
+- name: Require expected model checksum
+  ansible.builtin.assert:
+    that:
+      - "'4cc57c0f51040a226e5a72cc47b7613f7772950e460a665f7083de89f183f60e' in model_checksum.stdout"
+    fail_msg: "Model checksum mismatch"
+
+- name: Verify model projector checksum
+  ansible.builtin.command:
+    cmd: sha256sum "{{ model_dst }}/mmproj.gguf"
+  register: model_projector_checksum
+  changed_when: false
+
+- name: Require expected model projector checksum
+  ansible.builtin.assert:
+    that:
+      - "'f48b452316f9b213758e8659444029b961a24a07f99a1abb2a9f88b06f7c00c6' in model_projector_checksum.stdout"
+    fail_msg: "Model projector checksum mismatch"

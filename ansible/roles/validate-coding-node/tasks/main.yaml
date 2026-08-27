@@ -1,0 +1,120 @@
+---
+- name: Verify approved kernel
+  ansible.builtin.assert:
+    that:
+      - ansible_kernel == "6.8.0-100-generic"
+    fail_msg: "Unexpected kernel: {{ ansible_kernel }}"
+
+- name: Verify NVIDIA GPU
+  ansible.builtin.command:
+    cmd: nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+  register: validation_nvidia
+  changed_when: false
+
+- name: Verify inference service is active
+  ansible.builtin.command:
+    cmd: systemctl is-active ai-forge-muse.service
+  register: validation_service
+  changed_when: false
+
+- name: Require inference service
+  ansible.builtin.assert:
+    that:
+      - validation_service.stdout == "active"
+
+- name: Verify OpenAI models endpoint
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/v1/models
+    method: GET
+    return_content: true
+    status_code: 200
+  register: validation_models
+
+- name: Verify chat completion
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/v1/chat/completions
+    method: POST
+    body_format: json
+    body:
+      model: muse-glimmer-30b
+      messages:
+        - role: user
+          content: "Reply with exactly: AI_FORGE_OK"
+      temperature: 0
+      max_tokens: 256
+    return_content: true
+    status_code: 200
+  register: validation_chat
+
+- name: Require expected chat response
+  ansible.builtin.assert:
+    that:
+      - "'AI_FORGE_OK' in validation_chat.json.choices[0].message.content"
+    fail_msg: "Inference API did not return expected validation response"
+
+- name: Remove previous coding smoke-test repository
+  ansible.builtin.file:
+    path: /tmp/ai-forge-coding-smoke
+    state: absent
+
+- name: Create coding smoke-test repository directory
+  ansible.builtin.file:
+    path: /tmp/ai-forge-coding-smoke
+    state: directory
+    owner: nispoe
+    group: nispoe
+    mode: "0755"
+
+- name: Initialize coding smoke-test repository
+  ansible.builtin.shell: |
+    sudo -u nispoe -H bash -c '
+      set -e
+      cd /tmp/ai-forge-coding-smoke
+
+      git init -q
+      git config user.name "AI Forge Validation"
+      git config user.email "ai-forge-validation@localhost"
+
+      printf "def add(a, b):\n    return a + b\n" > math_utils.py
+
+      git add math_utils.py
+      git commit -qm "initial"
+    '
+  args:
+    executable: /bin/bash
+
+- name: Run Aider coding smoke test
+  ansible.builtin.shell: |
+    sudo -u nispoe -H bash -c '
+      set -e
+      cd /tmp/ai-forge-coding-smoke
+
+      timeout 300s aider \
+        --yes-always \
+        --no-auto-commits \
+        --message "Add a function named multiply(a, b) to math_utils.py that returns a multiplied by b. Keep the existing add function." \
+        math_utils.py
+    '
+  args:
+    executable: /bin/bash
+
+- name: Verify Aider edited file correctly
+  ansible.builtin.command:
+    cmd: grep -F "def multiply(a, b):" /tmp/ai-forge-coding-smoke/math_utils.py
+  changed_when: false
+
+- name: Verify multiplication implementation
+  ansible.builtin.command:
+    cmd: grep -F "return a * b" /tmp/ai-forge-coding-smoke/math_utils.py
+  changed_when: false
+
+- name: Report full-stack validation
+  ansible.builtin.debug:
+    msg:
+      - "Kernel: {{ ansible_kernel }}"
+      - "GPU: {{ validation_nvidia.stdout }}"
+      - "Inference service: active"
+      - "OpenAI-compatible API: working"
+      - "Chat completion: working"
+      - "Aider coding edit: working"
+      - "Daedalus coding node: VALIDATED"

@@ -1,0 +1,19 @@
+---
+- name: Configure full Daedalus coding node
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  vars_files:
+    - ../../secrets/local.yaml
+
+  roles:
+    - daedalus-base
+    - kernel-policy
+    - network
+    - utilities
+    - nvidia-offline
+    - model
+    - llama-runtime
+    - coding-agent
+    - validate-coding-node

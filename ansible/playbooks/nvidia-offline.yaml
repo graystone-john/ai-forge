@@ -1,0 +1,9 @@
+---
+- name: Install NVIDIA from AI Forge offline cache
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  roles:
+    - kernel-policy
+    - nvidia-offline

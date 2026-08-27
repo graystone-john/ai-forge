@@ -1,0 +1,11 @@
+---
+- name: Verify common utility commands
+  ansible.builtin.command:
+    cmd: "{{ item }} --version"
+  loop:
+    - git
+    - curl
+    - rsync
+  register: utility_checks
+  changed_when: false
+  failed_when: false

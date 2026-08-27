@@ -1,0 +1,152 @@
+---
+- name: Define coding-agent artifact paths
+  ansible.builtin.set_fact:
+    aider_src: "/home/nispoe/graystone/provisioning-data/python/aider-0.86.2"
+    python_venv_src: "/home/nispoe/graystone/provisioning-data/packages/python-venv-3.12"
+
+    ai_forge_root: "/opt/ai-forge"
+    aider_cache_dst: "/opt/ai-forge/python/aider-0.86.2"
+    python_venv_dst: "/opt/ai-forge/packages/python-venv-3.12"
+    aider_venv: "/opt/ai-forge/venvs/aider-0.86.2"
+
+- name: Create AI Forge coding-agent directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ ai_forge_root }}"
+    - "/opt/ai-forge/python"
+    - "{{ aider_cache_dst }}"
+    - "/opt/ai-forge/packages"
+    - "{{ python_venv_dst }}"
+    - "/opt/ai-forge/venvs"
+
+- name: Copy Aider offline wheelhouse from Athena
+  ansible.posix.synchronize:
+    src: "{{ aider_src }}/"
+    dest: "{{ aider_cache_dst }}/"
+    archive: true
+    checksum: true
+    rsync_path: "sudo -n rsync"
+  delegate_to: localhost
+  become: false
+
+- name: Copy Python venv package bundle from Athena
+  ansible.posix.synchronize:
+    src: "{{ python_venv_src }}/"
+    dest: "{{ python_venv_dst }}/"
+    archive: true
+    checksum: true
+    rsync_path: "sudo -n rsync"
+  delegate_to: localhost
+  become: false
+
+- name: Verify Python venv package bundle checksums
+  ansible.builtin.command:
+    cmd: sha256sum -c ../meta/SHA256SUMS
+    chdir: "{{ python_venv_dst }}/packages"
+  changed_when: false
+
+- name: Check whether python3.12-venv is installed
+  ansible.builtin.command:
+    argv:
+      - dpkg-query
+      - -W
+      - -f=${Status}
+      - python3.12-venv
+  register: venv_package_status
+  changed_when: false
+  failed_when: false
+
+- name: Install Python venv support from offline package bundle
+  ansible.builtin.command:
+    argv:
+      - dpkg
+      - -i
+      - "{{ python_venv_dst }}/packages/libpython3.12-minimal_3.12.3-1ubuntu0.16_amd64.deb"
+      - "{{ python_venv_dst }}/packages/libpython3.12-stdlib_3.12.3-1ubuntu0.16_amd64.deb"
+      - "{{ python_venv_dst }}/packages/libpython3.12t64_3.12.3-1ubuntu0.16_amd64.deb"
+      - "{{ python_venv_dst }}/packages/python3.12_3.12.3-1ubuntu0.16_amd64.deb"
+      - "{{ python_venv_dst }}/packages/python3.12-minimal_3.12.3-1ubuntu0.16_amd64.deb"
+      - "{{ python_venv_dst }}/packages/python3-pip-whl_24.0+dfsg-1ubuntu1.3_all.deb"
+      - "{{ python_venv_dst }}/packages/python3-setuptools-whl_68.1.2-2ubuntu1.2_all.deb"
+      - "{{ python_venv_dst }}/packages/python3.12-venv_3.12.3-1ubuntu0.16_amd64.deb"
+      - "{{ python_venv_dst }}/packages/python3-venv_3.12.3-0ubuntu2.1_amd64.deb"
+  when: "'install ok installed' not in venv_package_status.stdout"
+
+- name: Check existing Aider virtual environment
+  ansible.builtin.stat:
+    path: "{{ aider_venv }}/bin/pip"
+  register: aider_venv_pip
+
+- name: Remove incomplete Aider virtual environment
+  ansible.builtin.file:
+    path: "{{ aider_venv }}"
+    state: absent
+  when: not aider_venv_pip.stat.exists
+
+- name: Create Aider virtual environment
+  ansible.builtin.command:
+    cmd: python3 -m venv "{{ aider_venv }}"
+    creates: "{{ aider_venv }}/bin/python"
+
+- name: Install Aider from offline wheelhouse
+  ansible.builtin.command:
+    argv:
+      - "{{ aider_venv }}/bin/python"
+      - -m
+      - pip
+      - install
+      - --no-index
+      - --find-links
+      - "{{ aider_cache_dst }}/wheels"
+      - -r
+      - "{{ aider_cache_dst }}/meta/requirements.lock"
+  register: aider_install
+  changed_when: "'Successfully installed' in aider_install.stdout"
+
+- name: Link Aider into system PATH
+  ansible.builtin.file:
+    src: "{{ aider_venv }}/bin/aider"
+    dest: /usr/local/bin/aider
+    state: link
+    force: true
+
+- name: Verify Aider version
+  ansible.builtin.command:
+    cmd: aider --version
+  register: aider_version
+  changed_when: false
+
+- name: Require Aider 0.86.2
+  ansible.builtin.assert:
+    that:
+      - "'aider 0.86.2' in aider_version.stdout"
+    fail_msg: "Unexpected Aider version"
+
+- name: Report coding-agent state
+  ansible.builtin.debug:
+    msg:
+      - "Aider: {{ aider_version.stdout }}"
+
+- name: Install Aider configuration for coding user
+  ansible.builtin.template:
+    src: aider.conf.yml.j2
+    dest: /home/nispoe/.aider.conf.yml
+    owner: nispoe
+    group: nispoe
+    mode: "0600"
+
+- name: Verify Aider configuration exists
+  ansible.builtin.stat:
+    path: /home/nispoe/.aider.conf.yml
+  register: aider_config_file
+
+- name: Require Aider configuration
+  ansible.builtin.assert:
+    that:
+      - aider_config_file.stat.exists
+    fail_msg: "Aider configuration was not installed"

@@ -1,0 +1,8 @@
+---
+- name: Apply AI Forge kernel policy
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  roles:
+    - kernel-policy

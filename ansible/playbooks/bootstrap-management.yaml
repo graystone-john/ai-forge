@@ -1,0 +1,34 @@
+---
+- name: Bootstrap AI Forge management identity
+  hosts: daedalus
+  gather_facts: false
+  become: true
+
+  vars:
+    ai_forge_management_user: ai-forge
+
+  tasks:
+    - name: Create AI Forge management account
+      ansible.builtin.user:
+        name: "{{ ai_forge_management_user }}"
+        comment: "AI Forge automation"
+        shell: /bin/bash
+        create_home: true
+        password_lock: true
+
+    - name: Install AI Forge management SSH key
+      ansible.posix.authorized_key:
+        user: "{{ ai_forge_management_user }}"
+        key: "{{ lookup('file', '../../secrets/ssh/id_ed25519_ai_forge.pub') }}"
+        state: present
+        exclusive: true
+
+    - name: Allow AI Forge management account unattended sudo
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/90-ai-forge-ansible
+        owner: root
+        group: root
+        mode: "0440"
+        content: |
+          ai-forge ALL=(ALL) NOPASSWD: ALL
+        validate: /usr/sbin/visudo -cf %s

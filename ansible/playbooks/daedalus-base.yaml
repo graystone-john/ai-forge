@@ -1,0 +1,13 @@
+---
+- name: Configure Daedalus hardware baseline
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  vars_files:
+    - ../../secrets/local.yaml
+
+  roles:
+    - daedalus-base
+    - kernel-policy
+    - network

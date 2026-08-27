@@ -1,0 +1,10 @@
+---
+- name: Configure AI Forge coding agent
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  roles:
+    - kernel-policy
+    - nvidia-offline
+    - coding-agent

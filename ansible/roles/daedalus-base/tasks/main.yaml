@@ -1,0 +1,36 @@
+---
+- name: Require Daedalus architecture
+  ansible.builtin.assert:
+    that:
+      - ansible_architecture == "x86_64"
+    fail_msg: "Daedalus requires x86_64"
+
+- name: Require Daedalus provisioning Ethernet
+  ansible.builtin.stat:
+    path: /sys/class/net/{{ provisioning.interface }}
+  register: daedalus_provisioning_nic
+
+- name: Verify Daedalus provisioning Ethernet
+  ansible.builtin.assert:
+    that:
+      - daedalus_provisioning_nic.stat.exists
+
+- name: Require Daedalus Wi-Fi
+  ansible.builtin.stat:
+    path: /sys/class/net/wlp8s0
+  register: daedalus_wifi_nic
+
+- name: Verify Daedalus Wi-Fi
+  ansible.builtin.assert:
+    that:
+      - daedalus_wifi_nic.stat.exists
+
+- name: Report Daedalus hardware baseline
+  ansible.builtin.debug:
+    msg:
+      - "Family: daedalus"
+      - "Machine: {{ inventory_hostname }}"
+      - "Architecture: {{ ansible_architecture }}"
+      - "Kernel: {{ ansible_kernel }}"
+      - "Provisioning NIC: {{ provisioning.interface }}"
+      - "Wi-Fi NIC: wlp8s0"

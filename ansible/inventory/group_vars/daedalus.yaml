@@ -1,4 +1,4 @@
-ansible_user: nispoe
+ansible_user: ai-forge
 ansible_python_interpreter: /usr/bin/python3
 
 ai_forge_family: daedalus

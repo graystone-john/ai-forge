@@ -1,0 +1,26 @@
+[Unit]
+Description=AI Forge Muse Glimmer llama.cpp inference server
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=nispoe
+Group=nispoe
+
+ExecStart=/opt/ai-forge/bin/llama serve \
+  --model /opt/ai-forge/models/muse-glimmer-30b-q4_k_m/model.gguf \
+  --alias muse-glimmer-30b \
+  --ctx-size 32768 \
+  --gpu-layers all \
+  --parallel 1 \
+  --host 127.0.0.1 \
+  --port 8080
+
+Restart=on-failure
+RestartSec=5
+
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
