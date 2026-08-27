@@ -109,6 +109,32 @@ autoinstall:
 
     - curtin in-target --target=/target -- visudo -cf /etc/sudoers.d/ai-forge-boot-control
 
+    # AI Forge unattended Ansible management identity
+    - curtin in-target --target=/target -- useradd --create-home --shell /bin/bash --comment "AI Forge automation" ai-forge
+
+    - curtin in-target --target=/target -- passwd -l ai-forge
+
+    - mkdir -p /target/home/ai-forge/.ssh
+
+    - |
+      cat > /target/home/ai-forge/.ssh/authorized_keys <<'EOF'
+      {{ ssh_authorized_key }}
+      EOF
+
+    - curtin in-target --target=/target -- chown -R ai-forge:ai-forge /home/ai-forge/.ssh
+    - chmod 0700 /target/home/ai-forge/.ssh
+    - chmod 0600 /target/home/ai-forge/.ssh/authorized_keys
+
+    - |
+      cat > /target/etc/sudoers.d/90-ai-forge-ansible <<'EOF'
+      ai-forge ALL=(ALL) NOPASSWD: ALL
+      EOF
+
+    - chown root:root /target/etc/sudoers.d/90-ai-forge-ansible
+    - chmod 0440 /target/etc/sudoers.d/90-ai-forge-ansible
+
+    - curtin in-target --target=/target -- visudo -cf /etc/sudoers.d/90-ai-forge-ansible
+
     - |
       cat > /target/etc/cloud/cloud.cfg.d/99-ai-forge-console.cfg <<'EOF'
       output:
