@@ -11,7 +11,7 @@ network:
         use-routes: false
 
   wifis:
-    wlp8s0:
+    {{ daedalus_network.wifi_interface }}:
       dhcp4: true
       optional: true
       access-points:

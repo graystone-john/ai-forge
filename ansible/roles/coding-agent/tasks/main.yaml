@@ -24,7 +24,18 @@
     - "{{ python_venv_dst }}"
     - "/opt/ai-forge/venvs"
 
-- name: Copy Aider offline wheelhouse from AI Forge artifact cache
+- name: Record Aider wheelhouse transfer start
+  ansible.builtin.set_fact:
+    aider_transfer_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    aider_transfer_start_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report Aider wheelhouse transfer start
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: Aider wheelhouse transfer started at
+      {{ aider_transfer_start_time }}.
+
+- name: Copy Aider wheelhouse to AI Node
   ansible.posix.synchronize:
     src: "{{ aider_src }}/"
     dest: "{{ aider_cache_dst }}/"
@@ -36,11 +47,36 @@
       - "--chown=root:root"
       - "--no-perms"
       - "--no-times"
-      - "--info=progress2"
   delegate_to: localhost
   become: false
 
-- name: Copy Python venv package bundle from AI Forge artifact cache
+- name: Record Aider wheelhouse transfer completion
+  ansible.builtin.set_fact:
+    aider_transfer_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    aider_transfer_end_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report Aider wheelhouse transfer complete
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: Aider wheelhouse transfer completed at
+      {{ aider_transfer_end_time }}.
+      Elapsed: {{
+        (aider_transfer_end_epoch | int) -
+        (aider_transfer_start_epoch | int)
+      }} seconds.
+
+- name: Record Python venv bundle transfer start
+  ansible.builtin.set_fact:
+    python_venv_transfer_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    python_venv_transfer_start_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report Python venv bundle transfer start
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: Python venv package bundle transfer started at
+      {{ python_venv_transfer_start_time }}.
+
+- name: Copy Python venv package bundle to AI Node
   ansible.posix.synchronize:
     src: "{{ python_venv_src }}/"
     dest: "{{ python_venv_dst }}/"
@@ -52,9 +88,23 @@
       - "--chown=root:root"
       - "--no-perms"
       - "--no-times"
-      - "--info=progress2"
   delegate_to: localhost
   become: false
+
+- name: Record Python venv bundle transfer completion
+  ansible.builtin.set_fact:
+    python_venv_transfer_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    python_venv_transfer_end_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report Python venv bundle transfer complete
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: Python venv package bundle transfer completed at
+      {{ python_venv_transfer_end_time }}.
+      Elapsed: {{
+        (python_venv_transfer_end_epoch | int) -
+        (python_venv_transfer_start_epoch | int)
+      }} seconds.
 
 - name: Verify Python venv package bundle checksums
   ansible.builtin.command:
@@ -97,6 +147,18 @@
     cmd: python3 -m venv "{{ aider_venv }}"
     creates: "{{ aider_venv }}/bin/python"
 
+- name: Record Aider installation start
+  ansible.builtin.set_fact:
+    aider_install_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    aider_install_start_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report Aider installation start
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: Aider {{ coding_agent.aider_version }} installation
+      started at {{ aider_install_start_time }}.
+      Installing from the offline wheelhouse.
+
 - name: Install Aider from offline wheelhouse
   ansible.builtin.command:
     argv:
@@ -111,6 +173,21 @@
       - "{{ aider_cache_dst }}/meta/requirements.lock"
   register: aider_install
   changed_when: "'Successfully installed' in aider_install.stdout"
+
+- name: Record Aider installation completion
+  ansible.builtin.set_fact:
+    aider_install_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    aider_install_end_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report Aider installation complete
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: Aider {{ coding_agent.aider_version }} installation
+      completed at {{ aider_install_end_time }}.
+      Elapsed: {{
+        (aider_install_end_epoch | int) -
+        (aider_install_start_epoch | int)
+      }} seconds.
 
 - name: Link Aider into system PATH
   ansible.builtin.file:

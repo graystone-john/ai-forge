@@ -22,16 +22,16 @@
           - provisioning_nic.stat.exists
         fail_msg: "Provisioning interface {{ provisioning.interface }} not found"
 
-    - name: Verify Intel Wi-Fi interface exists
+    - name: Verify AI Node Wi-Fi interface exists
       ansible.builtin.stat:
-        path: /sys/class/net/wlp8s0
+        path: /sys/class/net/{{ daedalus_network.wifi_interface }}
       register: wifi_nic
 
     - name: Require Wi-Fi interface
       ansible.builtin.assert:
         that:
           - wifi_nic.stat.exists
-        fail_msg: "Wi-Fi interface wlp8s0 not found"
+        fail_msg: "Wi-Fi interface {{ daedalus_network.wifi_interface }} not found"
 
     - name: Verify current Netplan file exists
       ansible.builtin.stat:
@@ -51,4 +51,4 @@
           - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
           - "Kernel: {{ ansible_kernel }}"
           - "Provisioning interface: {{ provisioning.interface }}"
-          - "Wi-Fi interface: wlp8s0"
+          - "Wi-Fi interface: {{ daedalus_network.wifi_interface }}"

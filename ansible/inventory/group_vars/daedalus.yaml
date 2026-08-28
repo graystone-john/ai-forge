@@ -1,5 +1,6 @@
 ansible_user: ai-forge
 ansible_python_interpreter: /usr/bin/python3
+ansible_ssh_common_args: '-o StrictHostKeyChecking=accept-new'
 
 ai_forge_family: daedalus
 ai_forge_role: local-ai-coding-node
@@ -10,3 +11,6 @@ daedalus_kernel:
 daedalus_nvidia:
   driver_version: "595.84"
   bundle_name: "nvidia-595-kernel-6.8.0-100"
+
+daedalus_network:
+  wifi_interface: wlp8s0

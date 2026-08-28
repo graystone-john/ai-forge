@@ -1,5 +1,5 @@
 ---
-- name: Verify AI Node after GPU reboot
+- name: Verify AI Node after reboot
   hosts: daedalus
   gather_facts: true
   become: true
@@ -7,7 +7,7 @@
   pre_tasks:
     - name: Report AI Forge stage start
       ansible.builtin.debug:
-        msg: "AI_FORGE_STAGE_START stage=2 name=post-reboot-gpu-check machine={{ inventory_hostname }}"
+        msg: "AI_FORGE_STAGE_START stage=2 name=post-reboot-validation machine={{ inventory_hostname }}"
 
   tasks:
     - name: Require approved kernel after reboot
@@ -21,13 +21,33 @@
       register: active_gpu
       changed_when: false
 
+    - name: Verify AI Node Wi-Fi IPv4 address
+      ansible.builtin.command:
+        cmd: "ip -4 -o addr show dev {{ daedalus_network.wifi_interface }}"
+      register: wifi_ipv4
+      changed_when: false
+
+    - name: Verify AI Node Internet connectivity
+      ansible.builtin.command:
+        cmd: "ping -I {{ daedalus_network.wifi_interface }} -c 2 -W 3 1.1.1.1"
+      changed_when: false
+
+    - name: Verify AI Node DNS resolution
+      ansible.builtin.command:
+        cmd: getent ahostsv4 github.com
+      changed_when: false
+
     - name: Report post-reboot AI Node state
       ansible.builtin.debug:
         msg:
           - "Kernel: {{ ansible_kernel }}"
           - "GPU: {{ active_gpu.stdout }}"
+          - "Wi-Fi interface: {{ daedalus_network.wifi_interface }}"
+          - "Wi-Fi IPv4: {{ wifi_ipv4.stdout }}"
+          - "Internet: reachable"
+          - "DNS: working"
 
   post_tasks:
     - name: Report AI Forge stage complete
       ansible.builtin.debug:
-        msg: "AI_FORGE_STAGE_COMPLETE stage=2 name=post-reboot-gpu-check machine={{ inventory_hostname }}"
+        msg: "AI_FORGE_STAGE_COMPLETE stage=2 name=post-reboot-validation machine={{ inventory_hostname }}"

@@ -83,6 +83,18 @@
   args:
     executable: /bin/bash
 
+- name: Record Aider coding smoke test start
+  ansible.builtin.set_fact:
+    aider_smoke_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    aider_smoke_start_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report Aider coding smoke test start
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: Aider coding smoke test started at
+      {{ aider_smoke_start_time }}.
+      Waiting for local inference and code edit completion.
+
 - name: Run Aider coding smoke test
   ansible.builtin.shell: |
     sudo -u nispoe -H bash -c '
@@ -97,6 +109,21 @@
     '
   args:
     executable: /bin/bash
+
+- name: Record Aider coding smoke test completion
+  ansible.builtin.set_fact:
+    aider_smoke_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    aider_smoke_end_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report Aider coding smoke test complete
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: Aider coding smoke test completed at
+      {{ aider_smoke_end_time }}.
+      Elapsed: {{
+        (aider_smoke_end_epoch | int) -
+        (aider_smoke_start_epoch | int)
+      }} seconds.
 
 - name: Verify Aider edited file correctly
   ansible.builtin.command:

@@ -17,7 +17,7 @@
 
 - name: Require Daedalus Wi-Fi
   ansible.builtin.stat:
-    path: /sys/class/net/wlp8s0
+    path: /sys/class/net/{{ daedalus_network.wifi_interface }}
   register: daedalus_wifi_nic
 
 - name: Verify Daedalus Wi-Fi
@@ -33,4 +33,4 @@
       - "Architecture: {{ ansible_architecture }}"
       - "Kernel: {{ ansible_kernel }}"
       - "Provisioning NIC: {{ provisioning.interface }}"
-      - "Wi-Fi NIC: wlp8s0"
+      - "Wi-Fi NIC: {{ daedalus_network.wifi_interface }}"

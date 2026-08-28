@@ -18,7 +18,18 @@
     group: root
     mode: "0755"
 
-- name: Copy NVIDIA offline bundle to target
+- name: Record NVIDIA bundle transfer start
+  ansible.builtin.set_fact:
+    nvidia_transfer_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    nvidia_transfer_start_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report NVIDIA bundle transfer start
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: NVIDIA package bundle transfer started at
+      {{ nvidia_transfer_start_time }}.
+
+- name: Copy NVIDIA offline bundle to AI Node
   ansible.posix.synchronize:
     src: "{{ nvidia_bundle_src }}/"
     dest: "{{ nvidia_bundle_dst }}/"
@@ -30,9 +41,23 @@
       - "--chown=root:root"
       - "--no-perms"
       - "--no-times"
-      - "--info=progress2"
   delegate_to: localhost
   become: false
+
+- name: Record NVIDIA bundle transfer completion
+  ansible.builtin.set_fact:
+    nvidia_transfer_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    nvidia_transfer_end_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report NVIDIA bundle transfer complete
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: NVIDIA package bundle transfer completed at
+      {{ nvidia_transfer_end_time }}.
+      Elapsed: {{
+        (nvidia_transfer_end_epoch | int) -
+        (nvidia_transfer_start_epoch | int)
+      }} seconds.
 
 - name: Verify NVIDIA package bundle checksums
   ansible.builtin.command:
@@ -47,6 +72,20 @@
   changed_when: false
   failed_when: false
 
+- name: Record NVIDIA installation start
+  ansible.builtin.set_fact:
+    nvidia_install_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    nvidia_install_start_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  when: "'nvidia/' ~ daedalus_nvidia.driver_version ~ ', ' ~ daedalus_kernel.version not in existing_dkms_status.stdout"
+
+- name: Report NVIDIA installation start
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: NVIDIA {{ daedalus_nvidia.driver_version }} installation
+      started at {{ nvidia_install_start_time }}.
+      DKMS compilation may take several minutes.
+  when: "'nvidia/' ~ daedalus_nvidia.driver_version ~ ', ' ~ daedalus_kernel.version not in existing_dkms_status.stdout"
+
 - name: Install offline NVIDIA package set
   ansible.builtin.shell: |
     set -euo pipefail
@@ -54,6 +93,23 @@
   args:
     chdir: "{{ nvidia_bundle_dst }}"
     executable: /bin/bash
+  when: "'nvidia/' ~ daedalus_nvidia.driver_version ~ ', ' ~ daedalus_kernel.version not in existing_dkms_status.stdout"
+
+- name: Record NVIDIA installation completion
+  ansible.builtin.set_fact:
+    nvidia_install_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    nvidia_install_end_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  when: "'nvidia/' ~ daedalus_nvidia.driver_version ~ ', ' ~ daedalus_kernel.version not in existing_dkms_status.stdout"
+
+- name: Report NVIDIA installation complete
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: NVIDIA installation completed at
+      {{ nvidia_install_end_time }}.
+      Elapsed: {{
+        (nvidia_install_end_epoch | int) -
+        (nvidia_install_start_epoch | int)
+      }} seconds.
   when: "'nvidia/' ~ daedalus_nvidia.driver_version ~ ', ' ~ daedalus_kernel.version not in existing_dkms_status.stdout"
 
 - name: Verify DKMS built NVIDIA for approved kernel
