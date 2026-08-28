@@ -26,20 +26,6 @@ bootcmd:
 autoinstall:
   version: 1
 
-  network:
-    version: 2
-    ethernets:
-      provisioning:
-        match:
-          macaddress: "{{ provisioning_mac }}"
-        dhcp4: true
-        dhcp6: false
-        dhcp4-overrides:
-          use-routes: false
-
-  source:
-    id: ubuntu-server-minimal
-
   apt:
     geoip: false
     fallback: offline-install
