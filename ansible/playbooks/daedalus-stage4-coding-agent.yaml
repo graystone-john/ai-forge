@@ -13,6 +13,7 @@
         msg: "AI_FORGE_STAGE_START stage=4 name=coding-agent machine={{ inventory_hostname }}"
 
   roles:
+    - agent-identity
     - coding-agent
 
   post_tasks:

@@ -213,17 +213,17 @@
     msg:
       - "Aider: {{ aider_version.stdout }}"
 
-- name: Install Aider configuration for coding user
+- name: Install Aider configuration for agent identity
   ansible.builtin.template:
     src: aider.conf.yml.j2
-    dest: /home/nispoe/.aider.conf.yml
-    owner: nispoe
-    group: nispoe
+    dest: "/home/{{ agent_identity.user }}/.aider.conf.yml"
+    owner: "{{ agent_identity.user }}"
+    group: "{{ agent_identity.user }}"
     mode: "0600"
 
 - name: Verify Aider configuration exists
   ansible.builtin.stat:
-    path: /home/nispoe/.aider.conf.yml
+    path: "/home/{{ agent_identity.user }}/.aider.conf.yml"
   register: aider_config_file
 
 - name: Require Aider configuration

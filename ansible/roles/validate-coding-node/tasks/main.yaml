@@ -61,13 +61,13 @@
   ansible.builtin.file:
     path: /tmp/ai-forge-coding-smoke
     state: directory
-    owner: nispoe
-    group: nispoe
+    owner: "{{ agent_identity.user }}"
+    group: "{{ agent_identity.user }}"
     mode: "0755"
 
 - name: Initialize coding smoke-test repository
   ansible.builtin.shell: |
-    sudo -u nispoe -H bash -c '
+    sudo -u {{ agent_identity.user }} -H bash -c '
       set -e
       cd /tmp/ai-forge-coding-smoke
 
@@ -97,7 +97,7 @@
 
 - name: Run Aider coding smoke test
   ansible.builtin.shell: |
-    sudo -u nispoe -H bash -c '
+    sudo -u {{ agent_identity.user }} -H bash -c '
       set -e
       cd /tmp/ai-forge-coding-smoke
 

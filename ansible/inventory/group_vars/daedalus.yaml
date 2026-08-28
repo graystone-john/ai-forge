@@ -14,3 +14,8 @@ daedalus_nvidia:
 
 daedalus_network:
   wifi_interface: wlp8s0
+
+agent_identity:
+  user: daedalus
+  name: Daedalus
+  email: daedalus@graystone.systems

@@ -1,0 +1,50 @@
+---
+- name: Create AI Node agent identity
+  ansible.builtin.user:
+    name: "{{ agent_identity.user }}"
+    comment: "{{ agent_identity.name }}"
+    shell: /bin/bash
+    create_home: true
+    state: present
+
+- name: Create agent development directory
+  ansible.builtin.file:
+    path: "/home/{{ agent_identity.user }}/graystone"
+    state: directory
+    owner: "{{ agent_identity.user }}"
+    group: "{{ agent_identity.user }}"
+    mode: "0755"
+
+- name: Configure agent Git user name
+  ansible.builtin.command:
+    argv:
+      - sudo
+      - -u
+      - "{{ agent_identity.user }}"
+      - -H
+      - git
+      - config
+      - --global
+      - user.name
+      - "{{ agent_identity.name }}"
+
+- name: Configure agent Git email
+  ansible.builtin.command:
+    argv:
+      - sudo
+      - -u
+      - "{{ agent_identity.user }}"
+      - -H
+      - git
+      - config
+      - --global
+      - user.email
+      - "{{ agent_identity.email }}"
+
+- name: Report AI Node agent identity
+  ansible.builtin.debug:
+    msg:
+      - "Agent: {{ agent_identity.name }}"
+      - "Linux user: {{ agent_identity.user }}"
+      - "Git identity: {{ agent_identity.name }} <{{ agent_identity.email }}>"
+      - "Workspace: /home/{{ agent_identity.user }}/graystone"
