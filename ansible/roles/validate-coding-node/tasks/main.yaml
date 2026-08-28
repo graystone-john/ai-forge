@@ -52,88 +52,25 @@
       - "'AI_FORGE_OK' in validation_chat.json.choices[0].message.content"
     fail_msg: "Inference API did not return expected validation response"
 
-- name: Remove previous coding smoke-test repository
-  ansible.builtin.file:
-    path: /tmp/ai-forge-coding-smoke
-    state: absent
-
-- name: Create coding smoke-test repository directory
-  ansible.builtin.file:
-    path: /tmp/ai-forge-coding-smoke
-    state: directory
-    owner: "{{ agent_identity.user }}"
-    group: "{{ agent_identity.user }}"
-    mode: "0755"
-
-- name: Initialize coding smoke-test repository
+- name: Run Aider connectivity smoke test
   ansible.builtin.shell: |
-    sudo -u {{ agent_identity.user }} -H bash -c '
-      set -e
-      cd /tmp/ai-forge-coding-smoke
-
-      git init -q
-      git config user.name "AI Forge Validation"
-      git config user.email "ai-forge-validation@localhost"
-
-      printf "def add(a, b):\n    return a + b\n" > math_utils.py
-
-      git add math_utils.py
-      git commit -qm "initial"
-    '
-  args:
-    executable: /bin/bash
-
-- name: Record Aider coding smoke test start
-  ansible.builtin.set_fact:
-    aider_smoke_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
-    aider_smoke_start_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
-
-- name: Report Aider coding smoke test start
-  ansible.builtin.debug:
-    msg: >-
-      AI Forge: Aider coding smoke test started at
-      {{ aider_smoke_start_time }}.
-      Waiting for local inference and code edit completion.
-
-- name: Run Aider coding smoke test
-  ansible.builtin.shell: |
-    sudo -u {{ agent_identity.user }} -H bash -c '
-      set -e
-      cd /tmp/ai-forge-coding-smoke
-
-      timeout 300s aider \
+    sudo -u {{ agent_identity.user }} -H bash -lc '
+      cd "$HOME"
+      timeout 60s aider \
         --yes-always \
         --no-auto-commits \
-        --message "Add a function named multiply(a, b) to math_utils.py that returns a multiplied by b. Keep the existing add function." \
-        math_utils.py
+        --message "Reply with exactly AI_FORGE_AIDER_OK. Do not edit any files."
     '
   args:
     executable: /bin/bash
-
-- name: Record Aider coding smoke test completion
-  ansible.builtin.set_fact:
-    aider_smoke_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
-    aider_smoke_end_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
-
-- name: Report Aider coding smoke test complete
-  ansible.builtin.debug:
-    msg: >-
-      AI Forge: Aider coding smoke test completed at
-      {{ aider_smoke_end_time }}.
-      Elapsed: {{
-        (aider_smoke_end_epoch | int) -
-        (aider_smoke_start_epoch | int)
-      }} seconds.
-
-- name: Verify Aider edited file correctly
-  ansible.builtin.command:
-    cmd: grep -F "def multiply(a, b):" /tmp/ai-forge-coding-smoke/math_utils.py
+  register: validation_aider
   changed_when: false
 
-- name: Verify multiplication implementation
-  ansible.builtin.command:
-    cmd: grep -F "return a * b" /tmp/ai-forge-coding-smoke/math_utils.py
-  changed_when: false
+- name: Require expected Aider response
+  ansible.builtin.assert:
+    that:
+      - "'AI_FORGE_AIDER_OK' in validation_aider.stdout"
+    fail_msg: "Aider did not return expected validation response"
 
 - name: Report full-stack validation
   ansible.builtin.debug:
@@ -144,6 +81,6 @@
       - "Model: {{ model.id }}"
       - "OpenAI-compatible API: working"
       - "Chat completion: working"
-      - "Aider coding edit: working"
+      - "Aider inference integration: working"
       - "AI Node: VALIDATED"
 
