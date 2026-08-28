@@ -60,8 +60,32 @@ def main():
             ROOT / "profiles" / profile_name / "profile.yaml"
         )
 
-    ubuntu = profiles["ubuntu-ai-node"]["os"]
-    ubuntu_version = ubuntu["version"]
+    os_profiles = [
+        (profile_name, profile["os"])
+        for profile_name, profile in profiles.items()
+        if "os" in profile
+    ]
+
+    if not os_profiles:
+        raise RuntimeError(
+            f"Machine {machine_name} has no profile defining an OS"
+        )
+
+    if len(os_profiles) > 1:
+        names = ", ".join(name for name, _ in os_profiles)
+        raise RuntimeError(
+            f"Machine {machine_name} has multiple profiles defining an OS: {names}"
+        )
+
+    os_profile_name, os_config = os_profiles[0]
+
+    if os_config.get("distribution") != "ubuntu":
+        raise RuntimeError(
+            f"Unsupported OS distribution in profile {os_profile_name}: "
+            f"{os_config.get('distribution')!r}"
+        )
+
+    ubuntu_version = os_config["version"]
 
     context = {
         "machine_name": machine["name"],
