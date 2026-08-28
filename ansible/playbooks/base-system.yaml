@@ -10,7 +10,7 @@
   pre_tasks:
     - name: Report AI Forge stage start
       ansible.builtin.debug:
-        msg: "AI_FORGE_STAGE_START stage=1 name=base-gpu machine={{ inventory_hostname }}"
+        msg: "AI_FORGE_STEP_START name=base-system machine={{ inventory_hostname }}"
 
   roles:
     - daedalus-base
@@ -22,4 +22,4 @@
   post_tasks:
     - name: Report AI Forge stage complete
       ansible.builtin.debug:
-        msg: "AI_FORGE_STAGE_COMPLETE stage=1 name=base-gpu machine={{ inventory_hostname }}"
+        msg: "AI_FORGE_STEP_COMPLETE name=base-system machine={{ inventory_hostname }}"

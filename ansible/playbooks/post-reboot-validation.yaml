@@ -7,7 +7,7 @@
   pre_tasks:
     - name: Report AI Forge stage start
       ansible.builtin.debug:
-        msg: "AI_FORGE_STAGE_START stage=2 name=post-reboot-validation machine={{ inventory_hostname }}"
+        msg: "AI_FORGE_STEP_START name=post-reboot-validation machine={{ inventory_hostname }}"
 
   tasks:
     - name: Require approved kernel after reboot
@@ -50,4 +50,4 @@
   post_tasks:
     - name: Report AI Forge stage complete
       ansible.builtin.debug:
-        msg: "AI_FORGE_STAGE_COMPLETE stage=2 name=post-reboot-validation machine={{ inventory_hostname }}"
+        msg: "AI_FORGE_STEP_COMPLETE name=post-reboot-validation machine={{ inventory_hostname }}"

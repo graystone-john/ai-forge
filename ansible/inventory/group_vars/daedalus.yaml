@@ -19,3 +19,7 @@ agent_identity:
   user: daedalus
   name: Daedalus
   email: daedalus@graystone.systems
+
+agent_credentials:
+  github_private_key: "{{ playbook_dir }}/../../secrets/agents/daedalus/id_ed25519_github"
+  github_public_key: "{{ playbook_dir }}/../../secrets/agents/daedalus/id_ed25519_github.pub"

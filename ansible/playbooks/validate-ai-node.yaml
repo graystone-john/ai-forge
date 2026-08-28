@@ -1,5 +1,5 @@
 ---
-- name: Configure AI Node inference stack
+- name: Validate AI Node
   hosts: daedalus
   gather_facts: true
   become: true
@@ -10,13 +10,12 @@
   pre_tasks:
     - name: Report AI Forge stage start
       ansible.builtin.debug:
-        msg: "AI_FORGE_STAGE_START stage=3 name=inference machine={{ inventory_hostname }}"
+        msg: "AI_FORGE_STEP_START name=validate-ai-node machine={{ inventory_hostname }}"
 
   roles:
-    - model
-    - llama-runtime
+    - validate-coding-node
 
   post_tasks:
     - name: Report AI Forge stage complete
       ansible.builtin.debug:
-        msg: "AI_FORGE_STAGE_COMPLETE stage=3 name=inference machine={{ inventory_hostname }}"
+        msg: "AI_FORGE_STEP_COMPLETE name=validate-ai-node machine={{ inventory_hostname }}"

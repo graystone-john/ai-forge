@@ -1,5 +1,5 @@
 ---
-- name: Configure AI Node coding agent
+- name: Configure AI Node inference stack
   hosts: daedalus
   gather_facts: true
   become: true
@@ -10,13 +10,13 @@
   pre_tasks:
     - name: Report AI Forge stage start
       ansible.builtin.debug:
-        msg: "AI_FORGE_STAGE_START stage=4 name=coding-agent machine={{ inventory_hostname }}"
+        msg: "AI_FORGE_STEP_START name=inference machine={{ inventory_hostname }}"
 
   roles:
-    - agent-identity
-    - coding-agent
+    - model
+    - llama-runtime
 
   post_tasks:
     - name: Report AI Forge stage complete
       ansible.builtin.debug:
-        msg: "AI_FORGE_STAGE_COMPLETE stage=4 name=coding-agent machine={{ inventory_hostname }}"
+        msg: "AI_FORGE_STEP_COMPLETE name=inference machine={{ inventory_hostname }}"

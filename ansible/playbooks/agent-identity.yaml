@@ -1,0 +1,18 @@
+---
+- name: Configure AI Node agent identity
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  pre_tasks:
+    - name: Report AI Forge step start
+      ansible.builtin.debug:
+        msg: "AI_FORGE_STEP_START name=agent-identity machine={{ inventory_hostname }}"
+
+  roles:
+    - agent-identity
+
+  post_tasks:
+    - name: Report AI Forge step complete
+      ansible.builtin.debug:
+        msg: "AI_FORGE_STEP_COMPLETE name=agent-identity machine={{ inventory_hostname }}"

@@ -16,6 +16,27 @@
     mode: "0755"
 
 - name: Configure agent Git user name
+  community.general.git_config:
+    name: user.name
+    value: "{{ agent_identity.name }}"
+    scope: file
+    file: "/home/{{ agent_identity.user }}/.gitconfig"
+
+- name: Configure agent Git email
+  community.general.git_config:
+    name: user.email
+    value: "{{ agent_identity.email }}"
+    scope: file
+    file: "/home/{{ agent_identity.user }}/.gitconfig"
+
+- name: Set agent Git config ownership
+  ansible.builtin.file:
+    path: "/home/{{ agent_identity.user }}/.gitconfig"
+    owner: "{{ agent_identity.user }}"
+    group: "{{ agent_identity.user }}"
+    mode: "0644"
+
+- name: Verify agent Git user name
   ansible.builtin.command:
     argv:
       - sudo
@@ -26,9 +47,10 @@
       - config
       - --global
       - user.name
-      - "{{ agent_identity.name }}"
+  register: agent_git_name
+  changed_when: false
 
-- name: Configure agent Git email
+- name: Verify agent Git email
   ansible.builtin.command:
     argv:
       - sudo
@@ -39,12 +61,20 @@
       - config
       - --global
       - user.email
-      - "{{ agent_identity.email }}"
+  register: agent_git_email
+  changed_when: false
+
+- name: Require configured agent Git identity
+  ansible.builtin.assert:
+    that:
+      - agent_git_name.stdout == agent_identity.name
+      - agent_git_email.stdout == agent_identity.email
+    fail_msg: "Agent Git identity is not configured correctly"
 
 - name: Report AI Node agent identity
   ansible.builtin.debug:
     msg:
       - "Agent: {{ agent_identity.name }}"
       - "Linux user: {{ agent_identity.user }}"
-      - "Git identity: {{ agent_identity.name }} <{{ agent_identity.email }}>"
+      - "Git identity: {{ agent_git_name.stdout }} <{{ agent_git_email.stdout }}>"
       - "Workspace: /home/{{ agent_identity.user }}/graystone"

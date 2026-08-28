@@ -1,0 +1,78 @@
+---
+- name: Create agent SSH directory
+  ansible.builtin.file:
+    path: "/home/{{ agent_identity.user }}/.ssh"
+    state: directory
+    owner: "{{ agent_identity.user }}"
+    group: "{{ agent_identity.user }}"
+    mode: "0700"
+
+- name: Install agent GitHub private key
+  ansible.builtin.copy:
+    src: "{{ agent_credentials.github_private_key }}"
+    dest: "/home/{{ agent_identity.user }}/.ssh/id_ed25519_github"
+    owner: "{{ agent_identity.user }}"
+    group: "{{ agent_identity.user }}"
+    mode: "0600"
+  no_log: true
+
+- name: Install agent GitHub public key
+  ansible.builtin.copy:
+    src: "{{ agent_credentials.github_public_key }}"
+    dest: "/home/{{ agent_identity.user }}/.ssh/id_ed25519_github.pub"
+    owner: "{{ agent_identity.user }}"
+    group: "{{ agent_identity.user }}"
+    mode: "0644"
+
+- name: Configure agent GitHub SSH
+  ansible.builtin.copy:
+    dest: "/home/{{ agent_identity.user }}/.ssh/config"
+    owner: "{{ agent_identity.user }}"
+    group: "{{ agent_identity.user }}"
+    mode: "0600"
+    content: |
+      Host github.com
+          HostName github.com
+          User git
+          IdentityFile ~/.ssh/id_ed25519_github
+          IdentitiesOnly yes
+          StrictHostKeyChecking accept-new
+
+- name: Verify agent GitHub private key exists
+  ansible.builtin.stat:
+    path: "/home/{{ agent_identity.user }}/.ssh/id_ed25519_github"
+  register: agent_github_private_key
+
+- name: Require agent GitHub private key
+  ansible.builtin.assert:
+    that:
+      - agent_github_private_key.stat.exists
+    fail_msg: "Agent GitHub credential was not installed"
+
+- name: Verify agent GitHub SSH authentication
+  ansible.builtin.command:
+    argv:
+      - sudo
+      - -u
+      - "{{ agent_identity.user }}"
+      - -H
+      - ssh
+      - -T
+      - git@github.com
+  register: agent_github_auth
+  changed_when: false
+  failed_when: false
+
+- name: Require successful agent GitHub authentication
+  ansible.builtin.assert:
+    that:
+      - "'successfully authenticated' in (agent_github_auth.stdout ~ agent_github_auth.stderr)"
+    fail_msg: >-
+      GitHub SSH authentication failed for {{ agent_identity.name }}.
+
+- name: Report agent credential validation
+  ansible.builtin.debug:
+    msg:
+      - "Agent: {{ agent_identity.name }}"
+      - "GitHub SSH credential: installed"
+      - "GitHub SSH authentication: working"
