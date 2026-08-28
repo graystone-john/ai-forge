@@ -221,6 +221,17 @@
     group: root
     mode: "0755"
 
+- name: Create Aider state directories for agent identity
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ agent_identity.user }}"
+    group: "{{ agent_identity.user }}"
+    mode: "0755"
+  loop:
+    - "/home/{{ agent_identity.user }}/.aider"
+    - "/home/{{ agent_identity.user }}/.aider/caches"
+
 - name: Install Aider configuration for agent identity
   ansible.builtin.template:
     src: aider.conf.yml.j2
