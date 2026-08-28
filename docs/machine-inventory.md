@@ -1,292 +1,300 @@
-# Graystone AI Forge Machine Inventory
+# AI Forge Machine Inventory
 
-This document defines the naming, identity, addressing, and lifecycle conventions
-for machines managed by Graystone AI Forge.
+AI Forge maintains machine identity and provisioning configuration in Git.
 
-## Machine Naming
+Each managed machine has a machine definition under:
 
-Every physical machine has a unique name consisting of:
+```text
+machines/<machine>/
+```
 
-    <family>-<instance>
+The machine definition is the source of truth for hardware identity, provisioning network information, assigned profiles, and other machine-specific configuration.
 
-Examples:
+## Naming model
 
-    athena-01
-    athena-02
-    daedalus-01
-    daedalus-02
-
-The family name describes the logical machine family or purpose.
+Machine names use a family name followed by an instance number.
 
 Examples:
 
-- `athena` - provisioning/controller nodes
-- `daedalus` - local AI/coding nodes
+```text
+athena-01
+daedalus-01
+```
 
-The numeric instance suffix identifies a specific physical machine within that
-family.
+This allows additional machines in the same family to be added later:
 
-Instance numbers are zero-padded to two digits.
+```text
+athena-02
+daedalus-02
+```
 
-The numeric suffix is NOT hardcoded into AI Forge logic.
+The family identifies the general machine class or purpose while the instance number identifies the individual machine.
 
-AI Forge should allocate the next available instance number automatically during
-machine registration.
+## Current machines
 
-For example, if the inventory contains:
+### athena-01
 
-    daedalus-01
-    daedalus-02
+Athena is the AI Forge provisioning controller.
 
-then:
+Current responsibilities include:
 
-    ./forge register daedalus ...
+- Git repository management
+- machine inventory
+- provisioning artifact generation
+- PXE/iPXE services
+- DHCP/TFTP
+- HTTP provisioning services
+- Ansible controller
+- machine lifecycle operations
+- controller-side secret storage
 
-should create:
+Athena uses Wi-Fi for normal network and Internet connectivity and a dedicated Ethernet interface for the AI Forge provisioning network.
 
-    daedalus-03
+Provisioning interface:
 
-The machine directory and machine `name` field must use the allocated unique
-name:
+```text
+10.10.10.1/24
+```
 
-    machines/daedalus-03/machine.yaml
+Provisioning network:
 
-with:
+```text
+10.10.10.0/24
+```
 
-    name: daedalus-03
-    family: daedalus
+### daedalus-01
 
-## Machine Definitions
+Daedalus is the initial local AI coding node.
 
-Active machines are stored under:
+Current hardware definition includes:
 
-    machines/<machine-name>/machine.yaml
+```text
+CPU:         Intel Core i9-11900K
+Memory:      64 GB
+GPU:         NVIDIA RTX 3090 24 GB
+OS disk:     Samsung 980 PRO 2 TB
+Architecture: amd64
+```
 
-Example:
+Provisioning identity:
 
-    machines/daedalus-01/machine.yaml
+```text
+IP:  10.10.10.20
+MAC: f0:2f:74:d3:34:d2
+```
 
-A machine definition should contain:
+Daedalus currently provides:
 
-    name: daedalus-01
-    family: daedalus
-    generation: 1
+- local GPU inference
+- OpenAI-compatible inference API
+- Aider coding environment
+- dedicated machine-agent identity
+- dedicated Git identity and GitHub credential
+- development workspace
 
-The directory name and the `name` field must match.
+## Machine definitions
 
-## Generation
+Machine configuration is stored beneath:
 
-`generation` represents a meaningful hardware or family design revision.
+```text
+machines/
+```
 
-It is NOT a configuration version.
-
-For example, two machines built from the same design may be:
-
-    athena-01   generation: 1
-    athena-02   generation: 1
-
-A substantially redesigned Athena platform could later use:
-
-    generation: 2
-
-Normal configuration changes are versioned through Git rather than by changing
-the machine generation.
-
-## Provisioning Network
-
-Provisioning subnet:
-
-    10.10.10.0/24
-
-Address allocation:
-
-    10.10.10.1-9       Infrastructure and controller nodes
-    10.10.10.10-19     Temporary / unregistered DHCP clients
-    10.10.10.20-99     Registered AI Forge machines
-    10.10.10.100-254   Reserved for future use
-
-Current controller:
-
-    athena-01   10.10.10.1
-
-Registered machine addresses are stored in each machine's `machine.yaml`.
-
-Example:
-
-    network:
-      provisioning_mac: "f0:2f:74:d3:34:d2"
-      provisioning_ip: 10.10.10.20
-      provisioning_subnet: 10.10.10.0/24
-
-Machine definitions are the source of truth for registered IP assignments.
-
-Do not manually maintain registered `dhcp-host` entries in dnsmasq.
-
-AI Forge generates DHCP reservations from the machine inventory.
-
-## DHCP
-
-Temporary or unknown machines receive addresses from:
-
-    10.10.10.10-19
-
-Registered machines receive persistent DHCP reservations based on:
+A machine definition contains information such as:
 
 - machine name
+- family
+- generation
+- role
+- architecture
+- hardware
+- operating-system disk
 - provisioning MAC address
 - provisioning IP address
+- assigned profiles
 
-Generated reservations are written to:
+Generated provisioning files are derived from these definitions.
 
-    generated/dnsmasq/machines.conf
+Generated output is not the source of truth and should not be manually maintained.
 
-Generated files must not be manually edited.
+## Machine discovery
 
-## Machine Registration
+The provisioning system uses MAC-address-based discovery.
 
-The intended machine-registration workflow is:
+The global iPXE environment directs a booting machine to the AI Forge boot controller, which resolves the MAC address against registered machine definitions.
 
-    ./forge register <family> --mac <mac-address>
+Conceptually:
 
-Registration should automatically:
+```text
+machine PXE boot
+      ↓
+iPXE
+      ↓
+boot controller
+      ↓
+lookup provisioning MAC
+      ↓
+machine definition
+      ↓
+normal or provisioning boot behavior
+```
 
-1. Scan the active machine inventory.
-2. Determine the next available instance number for the requested family.
-3. Create the unique machine name `<family>-NN`.
-4. Determine the next available registered provisioning IP.
-5. Create `machines/<family>-NN/machine.yaml`.
-6. Record the provisioning MAC and allocated IP.
-7. Validate duplicate names, IP addresses, and MAC addresses.
-8. Generate DHCP reservations.
-9. Deploy or stage the updated provisioning configuration.
+This allows machine-specific provisioning behavior without maintaining separate manually configured PXE infrastructure for every target.
 
-Example:
+## Operator commands
 
-    ./forge register daedalus --mac aa:bb:cc:dd:ee:ff
+Current machine-oriented operator commands include:
 
-If `daedalus-01` already exists, AI Forge may create:
+```bash
+./forge machines
+./forge status <machine>
+./forge wait <machine>
+./forge wake <machine>
+./forge deploy <machine>
+./forge boot <machine> <action>
+./forge provision <machine>
+./forge chat <machine>
+```
 
-    daedalus-02
+### machines
 
-and assign:
+Lists registered machines.
 
-    10.10.10.21
+### status
 
-Neither the instance suffix nor the IP should normally need to be selected
-manually.
+Checks whether a machine is reachable and whether the AI Forge SSH management path is ready.
 
-## PXE Machine Discovery
+### wait
 
-The common PXE entry point must not contain a hardcoded machine name.
+Waits for a requested machine state such as SSH readiness or offline state.
 
-iPXE sends the provisioning NIC MAC address to the AI Forge boot controller.
+### wake
 
-Example:
+Sends Wake-on-LAN when necessary and waits for management readiness.
 
-    /forge/boot-mac?mac=f0:2f:74:d3:34:d2
+### deploy
 
-The controller searches:
+Generates, validates, and publishes provisioning configuration for a machine.
 
-    machines/*/machine.yaml
+`deploy` does not reboot or reinstall the target.
 
-and resolves the MAC address to the registered unique machine name.
+### boot
 
-Example:
+Performs explicit boot and power operations through the restricted target-side boot-control interface.
 
-    f0:2f:74:d3:34:d2 -> daedalus-01
+Supported operations currently include:
 
-The controller then evaluates that machine's runtime provisioning state and
-returns either the normal or provision boot configuration.
+```text
+status
+pxe-next
+clear-next
+reboot
+poweroff
+```
 
-This allows the same PXE entry point to support any number of registered
-machines without hardcoded `athena-01`, `daedalus-01`, etc. references.
+### provision
 
-## Machine Removal
+Performs the destructive bare-metal provisioning workflow.
 
-Machines should be retired rather than immediately destroyed.
+This composes lower-level capabilities rather than duplicating them.
 
-The intended interface is:
+### chat
 
-    ./forge remove daedalus-02
+Connects the operator to the configured machine-agent interface.
 
-Removal should:
+For Daedalus, the current backend is Aider using the local inference service.
 
-1. Remove the machine from active provisioning.
-2. Remove its DHCP reservation.
-3. Remove its live PXE/runtime state.
-4. Release its provisioning IP for reuse.
-5. Preserve the machine definition in Git history.
+## Planned machine registration
 
-Retired machine definitions may also be moved to:
+Automated machine registration is part of the intended AI Forge design but is not currently exposed by the `forge` CLI.
 
-    machines-retired/
+The planned interface is:
 
-Permanent deletion, if needed, should be a separate explicit operation.
+```bash
+./forge register <family> --mac <mac-address>
+```
 
-## Provisioning Modes
+The intended registration workflow will:
 
-Machines have two user-visible provisioning states:
-
-    normal
-    provision
-
-`normal` is always the safe/default state.
-
-`provision` means exactly ONE provisioning attempt.
-
-When a machine in `provision` mode requests its PXE boot configuration, the
-AI Forge controller must:
-
-1. Atomically reset the machine state to `normal`.
-2. Return the provisioning iPXE configuration.
-3. Allow the automated installation to proceed.
-
-This prevents repeated installation loops when PXE remains first in the
-machine's firmware boot order.
-
-There is intentionally no persistent destructive provisioning mode.
-
-## Secrets
-
-Secrets must never be committed to Git.
-
-Local secrets are stored under:
-
-    secrets/
+1. identify the requested machine family
+2. allocate the next available instance number
+3. allocate provisioning network configuration
+4. create the machine definition
+5. validate MAC, IP, and identity conflicts
+6. regenerate the appropriate provisioning configuration
 
 For example:
 
-    secrets/local.yaml
+```bash
+./forge register daedalus --mac aa:bb:cc:dd:ee:ff
+```
 
-The `secrets/` directory must remain excluded by `.gitignore`.
+could eventually create:
 
-Generated PXE/Autoinstall artifacts should not contain reusable plaintext
-secrets when this can reasonably be avoided.
+```text
+daedalus-02
+```
 
-The planned Athena bootstrap process will support importing secrets from
-removable USB media into the local secrets store.
+Until registration is implemented, machines are registered through the existing Git-managed machine-definition workflow.
 
-## Source of Truth
+## Planned machine removal
 
-The general rule is:
+Automated machine removal is also planned but is not currently exposed by the `forge` CLI.
 
-    Git-managed machine/profile/config definitions
-                    |
-                    v
-               generators
-                    |
-                    v
-          generated configuration
-                    |
-                    v
-            deployed runtime state
+The intended interface is:
 
-Do not manually edit generated or deployed configuration when the corresponding
-setting can be represented in the Git-managed source configuration.
+```bash
+./forge remove <machine>
+```
 
-## Provisioning Workflow
+Removal should remove the machine from active provisioning inventory while preserving appropriate historical information through Git.
 
-The operational boot, Wake-on-LAN, one-time PXE, SSH, and reprovisioning
-workflow is documented in:
+Machine removal must not silently destroy historical configuration or unrelated runtime data.
 
-    docs/provisioning-workflow.md
+## Inventory validation
+
+Machine inventory should be validated before generated configuration is deployed.
+
+Validation should detect conditions such as:
+
+- duplicate machine names
+- duplicate provisioning MAC addresses
+- duplicate provisioning IP addresses
+- invalid addresses
+- missing required fields
+- invalid profiles
+- incompatible architecture or hardware configuration
+
+The goal is to reject inconsistent inventory before it can affect the provisioning environment.
+
+## Source-of-truth policy
+
+Git-managed machine definitions are authoritative.
+
+The following belong in Git:
+
+- machine definitions
+- provisioning profiles
+- templates
+- Ansible roles and playbooks
+- scripts
+- documentation
+
+The following do not belong in Git:
+
+- secrets
+- private keys
+- local Python virtual environments
+- generated provisioning output
+- model files
+- installation media
+- runtime state
+- temporary files
+
+Local virtual environments such as:
+
+```text
+.venv/
+```
+
+must remain untracked because they contain machine-specific generated files and may contain architecture-specific binaries.

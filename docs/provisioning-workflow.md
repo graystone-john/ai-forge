@@ -1,501 +1,496 @@
-# Graystone AI Forge Provisioning Workflow
+# AI Forge Provisioning Workflow
 
-This document describes the normal machine-control and bare-metal provisioning
-workflow used by AI Forge.
+AI Forge provides a Git-managed workflow for reproducible bare-metal installation and post-install configuration of local AI machines.
 
-## Operator Interface
+The system intentionally separates:
 
-The preferred operator interface is the top-level `forge` command.
+1. machine definition
+2. provisioning artifact generation
+3. boot and power control
+4. destructive operating-system installation
+5. post-install Ansible configuration
+6. agent configuration and development
 
-Examples:
+This separation keeps individual operations understandable and allows lower-level capabilities to be tested independently.
 
-    ./forge machines
-    ./forge status daedalus-01
-    ./forge wake daedalus-01
-    ./forge deploy daedalus-01
-    ./forge boot daedalus-01 status
-    ./forge provision daedalus-01
+## Architecture
 
-The primary commands are:
+The current provisioning environment consists of:
 
-    machines
-        List machines known to AI Forge.
+```text
+                    Git repository
+                         |
+                         v
+                       Athena
+                 provisioning controller
+                  10.10.10.1/24
+                         |
+              dedicated Ethernet network
+                         |
+                         v
+                     Daedalus
+                    AI compute node
+```
 
-    status <machine>
-        Check network and AI Forge SSH readiness.
+Athena provides the provisioning infrastructure.
 
-    wake <machine>
-        Wake a machine and wait for management readiness.
+Daedalus is the initial managed AI coding node.
 
-    deploy <machine>
-        Generate, validate, and publish provisioning artifacts without
-        rebooting or provisioning the target.
+## Source of truth
 
-    boot <machine> <action>
-        Perform restricted remote firmware/power-control operations.
+Machine definitions and provisioning configuration originate in Git.
 
-    provision <machine>
-        Perform the complete destructive bare-metal reprovision workflow.
+Machine definitions are stored under:
 
-The scripts under `scripts/` are implementation components and may also be used
-directly for debugging.
+```text
+machines/
+```
 
-## Machine Status
+Templates, profiles, Ansible configuration, scripts, and documentation are also Git-managed.
 
-Check whether a machine is ready for AI Forge management:
+Generated provisioning output and runtime state are derived artifacts and are not the authoritative configuration.
 
-    ./forge status daedalus-01
+## Provisioning network
 
-The readiness sequence is:
+Athena uses a dedicated Ethernet interface for the provisioning network:
 
-    unreachable
-        |
-        v
-    network reachable
-        |
-        v
-    SSH key authentication succeeds
-        |
-        v
-    READY
+```text
+10.10.10.1/24
+```
 
-SSH readiness, not ping alone, is the authoritative indication that AI Forge
-can control the machine.
+Current provisioning subnet:
 
-## Wake-on-LAN
+```text
+10.10.10.0/24
+```
 
-Wake a managed machine with:
+Athena provides:
 
-    ./forge wake daedalus-01
+- DHCP
+- TFTP
+- iPXE
+- HTTP
+- boot-control service
+- generated Ubuntu Autoinstall configuration
 
-The wake operation:
+Internet connectivity is provided separately through Athena's normal network connection.
 
-1. Checks whether the machine is already SSH-ready.
-2. If not, sends a Wake-on-LAN magic packet to the registered provisioning MAC.
-3. Waits for the machine to boot.
-4. Continues polling until AI Forge SSH authentication succeeds.
-5. Reports the machine as ready.
+## MAC-based machine discovery
 
-Sending a magic packet alone does not constitute success.
+AI Forge uses the provisioning NIC MAC address as the initial hardware identity during PXE boot.
 
-## Normal Boot Architecture
-
-Managed workstation-class systems normally keep their installed OS first in
-UEFI boot order.
-
-Example:
-
-    Boot0000* Ubuntu
-    Boot0001* UEFI: PXE IPv4 ...
-
-Normal startup therefore follows:
-
-    power on
-       |
-       v
-    SSD / Ubuntu
-       |
-       v
-    network
-       |
-       v
-    sshd
-       |
-       v
-    AI Forge SSH-ready
-
-AI Forge does not require PXE to remain permanently first in firmware.
-
-## Remote Boot Control
-
-AI Forge exposes restricted remote boot control through:
-
-    ./forge boot <machine> <action>
-
-Supported actions are:
-
-    status
-    pxe-next
-    clear-next
-    reboot
-    poweroff
-
-For example:
-
-    ./forge boot daedalus-01 status
-
-The controller does not receive unrestricted passwordless sudo access on the
-managed node.
-
-Instead, Autoinstall installs the root-owned helper:
-
-    /usr/local/sbin/ai-forge-boot-control
-
-and machine identity:
-
-    /etc/ai-forge/machine.json
-
-The sudo policy permits the AI Forge management user to execute only specific
-boot-control operations through this helper.
-
-The helper discovers the PXE UEFI entry by matching the provisioning MAC
-registered for the machine against the MAC embedded in the firmware boot
-entry.
-
-It does not accept arbitrary UEFI boot-entry numbers from the remote caller.
-
-The `pxe-next` operation:
-
-1. Reads the registered provisioning MAC.
-2. Finds exactly one matching UEFI boot entry.
-3. Sets BootNext to that entry.
-4. Reads BootNext again and verifies the change.
-
-The `clear-next` operation will clear BootNext only when the current BootNext
-is the registered AI Forge PXE entry. It refuses to remove an unrelated
-BootNext setting.
-
-Reboot and poweroff are performed through the same restricted helper.
-
-This provides the controller with the privileges required for provisioning
-without granting unrestricted passwordless root access.
-
-## Deployment
-
-Generate, validate, and publish a machine's provisioning configuration with:
-
-    ./forge deploy daedalus-01
-
-Deployment performs:
-
-1. Generate machine-specific iPXE and Autoinstall configuration.
-2. Validate the machine configuration.
-3. Publish the generated artifacts to the provisioning HTTP tree.
-
-Deployment does not modify target firmware, reboot the target, or arm
-provisioning.
-
-This separation allows provisioning configuration to be prepared and inspected
-independently from destructive machine operations.
+The global iPXE flow chains to the AI Forge boot controller using the machine MAC address.
 
 Conceptually:
 
-    deploy
-        prepare provisioning artifacts
+```text
+UEFI PXE
+   ↓
+dnsmasq
+   ↓
+iPXE
+   ↓
+AI Forge boot controller
+   ↓
+MAC lookup
+   ↓
+machine definition
+   ↓
+normal boot or provisioning boot
+```
 
-    boot
-        control machine boot and power state
+This allows the controller to determine the correct machine configuration dynamically.
 
-    provision
-        orchestrate destructive bare-metal reprovisioning
+## Normal and provisioning states
 
-## Remote Provisioning
+A registered machine normally receives non-destructive boot behavior.
 
-Provision a running, SSH-ready machine with:
+Provisioning must be explicitly armed.
 
-    ./forge provision daedalus-01
+This prevents an ordinary PXE boot from automatically reinstalling the operating system.
 
-The provisioning action performs:
+The provisioning workflow combines:
 
-1. Verify the machine is SSH-ready.
-2. Run the normal deployment workflow to generate, validate, and publish the
-   provisioning configuration.
-3. Display the destructive provisioning plan.
-4. Ask the target-side boot-control helper to set and verify one-time PXE
-   BootNext.
-5. Arm AI Forge's one-shot `provision` state.
-6. Ask the target-side boot-control helper to reboot the machine.
-7. Remove the previous SSH host-key entry after the reboot request because the
-   known destructive reprovision will generate a new server identity.
+- generated machine configuration
+- one-shot provisioning state
+- one-time UEFI PXE selection
+- controlled reboot
 
-The permanent UEFI `BootOrder` is never modified.
+The target should return to normal boot behavior after the provisioning attempt.
 
-## One-Time PXE
+## Operator interface
 
-UEFI `BootNext` is used instead of changing permanent firmware boot order.
+The primary operator interface is the `forge` command.
 
-Example:
+```bash
+./forge machines
+./forge status <machine>
+./forge wait <machine>
+./forge wake <machine>
+./forge deploy <machine>
+./forge boot <machine> <action>
+./forge provision <machine>
+./forge chat <machine>
+```
 
-    BootOrder: 0000,0001
-    Boot0000: Ubuntu
-    Boot0001: PXE IPv4
+These commands intentionally use clean operator verbs.
 
-AI Forge temporarily sets:
+## machines
 
-    BootNext: 0001
+```bash
+./forge machines
+```
 
-The next reboot uses PXE exactly once.
+Lists registered AI Forge machines.
 
-After that boot, firmware automatically returns to the normal BootOrder.
+This provides the operator with the known machine inventory without requiring direct inspection of individual YAML files.
 
-AI Forge verifies that BootNext was successfully set before provisioning
-continues.
+## status
 
-If provisioning fails or is interrupted before the reboot request is
-successfully issued, AI Forge attempts to clear the one-time PXE BootNext.
+```bash
+./forge status <machine>
+```
 
-AI Forge will clear BootNext only when it points to the machine's registered
-PXE entry.
+Checks the current management status of a machine.
 
-## One-Shot Provisioning State
+The status path determines whether the machine is reachable and whether the AI Forge SSH management interface is ready.
 
-AI Forge exposes two operator-visible modes:
+## wait
 
-    normal
-    provision
+```bash
+./forge wait <machine>
+```
 
-`provision` always means ONE provisioning attempt.
+Waits for a machine to reach a requested operational state.
 
-When the target requests its PXE configuration:
+This is used internally by higher-level workflows and can also be useful for operator diagnostics.
 
-    provision
+## wake
+
+```bash
+./forge wake <machine>
+```
+
+Wakes a powered-down machine using Wake-on-LAN.
+
+If the machine is already SSH-ready, unnecessary wake behavior is avoided.
+
+After sending Wake-on-LAN, AI Forge waits for the management path to become available.
+
+## deploy
+
+```bash
+./forge deploy <machine>
+```
+
+Generates and validates provisioning artifacts and publishes them into Athena's live provisioning environment.
+
+Typical generated artifacts include:
+
+```text
+boot.ipxe
+normal.ipxe
+provision.ipxe
+meta-data
+user-data
+```
+
+`deploy` is intentionally non-destructive.
+
+It does not:
+
+- reboot the target
+- change the target operating system
+- automatically initiate provisioning
+
+This makes deployment independently testable.
+
+## boot
+
+```bash
+./forge boot <machine> <action>
+```
+
+Provides explicit target boot and power operations.
+
+Current actions include:
+
+```text
+status
+pxe-next
+clear-next
+reboot
+poweroff
+```
+
+### pxe-next
+
+Selects the machine's provisioning NIC as the next UEFI boot device.
+
+The selection is one-time and does not permanently change the normal boot order.
+
+### clear-next
+
+Clears the configured one-time UEFI boot selection.
+
+### reboot
+
+Requests a controlled target reboot.
+
+### poweroff
+
+Requests a controlled target shutdown.
+
+## Restricted boot control
+
+Boot operations are implemented through a root-owned target-side helper:
+
+```text
+/usr/local/sbin/ai-forge-boot-control
+```
+
+The helper validates operations before changing UEFI or power state.
+
+The one-time PXE operation is constrained to the provisioning MAC configured for the machine.
+
+This avoids granting arbitrary firmware manipulation through the normal operator interface.
+
+## provision
+
+```bash
+./forge provision <machine>
+```
+
+`provision` is the high-level destructive bare-metal rebuild workflow.
+
+It composes the lower-level capabilities rather than maintaining a separate implementation.
+
+Conceptually:
+
+```text
+./forge provision
         |
-        v
-    PXE request received
+        +--> deploy
         |
-        v
-    controller immediately resets state to normal
+        +--> verify/set one-time PXE BootNext
         |
-        v
-    provision.ipxe returned
+        +--> arm one-shot provisioning
+        |
+        +--> reboot target
+        |
+        +--> remove stale SSH host key
+        |
+        +--> target PXE boots
+        |
+        +--> Ubuntu Autoinstall
+        |
+        +--> target returns with SSH management
+```
 
-The machine is disarmed before the destructive installer starts.
+Because this operation reinstalls the target operating system, it should remain explicit and visibly distinct from `deploy`.
 
-This prevents repeated install loops.
+## Ubuntu Autoinstall
 
-## PXE Machine Identification
+AI Forge generates machine-specific Ubuntu Autoinstall configuration.
 
-The common iPXE entry point does not contain a hardcoded machine name.
+Templates are maintained under:
 
-It sends the provisioning NIC MAC address to the AI Forge controller:
+```text
+templates/autoinstall/
+```
 
-    /forge/boot-mac?mac=<client-mac>
+Generated configuration includes machine identity, networking, storage, SSH access, and AI Forge target-side management components.
 
-The controller resolves the MAC against:
+The installation process creates the clean operating-system baseline.
 
-    machines/*/machine.yaml
+Application and AI configuration are intentionally left to Ansible.
 
-Example:
+## Target management bootstrap
 
-    f0:2f:74:d3:34:d2 -> daedalus-01
+Autoinstall establishes the minimum management capability required for Athena to take control of the freshly installed target.
 
-Unknown MAC addresses fail closed.
+This includes the AI Forge SSH management path and target-side management components.
 
-The registered provisioning MAC is also installed on the managed node and is
-used by the restricted boot-control helper to identify the correct PXE UEFI
-entry.
+Once SSH is ready, post-install configuration can begin.
 
-## Storage Safety
+## Privilege model
 
-The OS disk is selected using the installer-visible udev serial recorded in the
-machine inventory.
+The long-term AI Forge privilege model favors narrowly scoped root-owned helpers.
 
-AI Forge does not rely on device names such as:
+Restricted helpers already exist for operations such as boot control and agent chat.
 
-    /dev/nvme0n1
+The current `ai-forge` Ansible management account still has broad passwordless sudo so Ansible can perform system configuration.
 
-because those names may change.
+This broader Ansible privilege should be treated separately from the restricted operational interfaces.
 
-Provision validation fails if the configured storage identity is inconsistent.
+The intended direction is to reduce privileges where practical without making machine configuration fragile or unnecessarily complex.
 
-## SSH Management
+## Post-install configuration
 
-Managed machines receive the AI Forge controller's public management key during
-Autoinstall.
+Bare-metal provisioning and post-install configuration are intentionally separate.
 
-Remote SSH uses key authentication.
+PXE and Autoinstall create a clean Ubuntu system.
 
-Password SSH authentication is disabled.
+Ansible transforms that baseline into the intended AI node.
 
-The local account password remains available for console/recovery use.
+AI Forge uses independently named Ansible steps rather than numbered stages.
 
-The AI Forge management private key is local secret material and must never be
-committed to Git.
+The intended lifecycle is:
 
-The management username is defined by AI Forge configuration rather than being
-hardcoded into the remote boot-control workflow.
+```text
+bootstrap-management
+        ↓
+base-system
+        ↓
+reboot
+        ↓
+post-reboot-validation
+        ↓
+agent-identity
+        ↓
+agent-credentials
+        ↓
+inference
+        ↓
+coding-tools
+        ↓
+validate-ai-node
+        ↓
+agent-workspace
+```
 
-## Privileged Operations
+Each playbook represents a stable responsibility and should remain independently executable and idempotent where practical.
 
-AI Forge does not grant its management account unrestricted passwordless sudo.
+See:
 
-Operations required for remote provisioning are exposed through the root-owned:
+```text
+docs/ansible-named-steps.md
+```
 
-    /usr/local/sbin/ai-forge-boot-control
+## Agent identity
 
-The sudo policy permits only:
+Machine agents use identities separate from both the human operator and the AI Forge management account.
 
-    status
-    pxe-next
-    clear-next
-    reboot
-    poweroff
+For Daedalus:
 
-The remote caller cannot supply arbitrary commands, arbitrary UEFI boot-entry
-numbers, or arbitrary efibootmgr arguments through this interface.
+```text
+Linux user: daedalus
+Git user:   Daedalus
+Git email:  daedalus@graystone.systems
+```
 
-The helper validates machine identity and provisioning MAC information from:
+The agent identity is created before its credentials and development workspace are installed.
 
-    /etc/ai-forge/machine.json
+## Agent credentials
 
-This creates a narrow privilege boundary between the controller and the managed
-node.
+Credentials are installed separately from identity creation.
 
-## SSH Host-Key Rotation
+Daedalus currently receives a dedicated GitHub SSH credential from Athena's controller-side secret store.
 
-A destructive reprovision generates new SSH host keys on the target.
+Secrets are not stored in the Git repository.
 
-AI Forge removes the previously trusted host-key entry only as part of an
-intentional reprovision workflow.
+The credential step validates that the resulting identity can authenticate successfully.
 
-The old host-key entry is removed after the target reboot request has
-successfully been issued. It is not removed during configuration generation,
-validation, BootNext setup, or provisioning arming.
+## Local inference
 
-This preserves the trusted host identity while AI Forge still needs to
-communicate with the currently installed operating system.
+The inference step installs the selected model and llama.cpp runtime.
 
-Global SSH host-key checking must not be disabled.
+Daedalus exposes an OpenAI-compatible API used by local coding tools.
 
-After a known reprovision, AI Forge permits the newly installed host identity
-to be recorded when management SSH first becomes available.
+Validation includes confirming that the configured model is visible through the models endpoint.
 
-Subsequent SSH connections use normal host-key checking.
+## Coding tools
 
-Stronger post-install identity verification may be added as part of future
-provisioning observability work.
+Coding tools are installed independently from the inference runtime.
 
-## Failure Safety
+The current Daedalus implementation uses Aider as the initial coding tool.
 
-The provision workflow fails closed.
+Aider is installed from an offline wheelhouse into a managed Python virtual environment.
 
-Before the destructive reboot, AI Forge tracks two transient conditions:
+Local virtual environments such as:
 
-    BOOTNEXT_SET
-    ARMED
+```text
+.venv/
+```
 
-Failures and operator interruptions use the same cleanup path.
+are machine-local generated state and must not be committed to the AI Forge repository.
 
-Examples:
+## Full-stack validation
 
-- target not SSH-ready -> stop
-- generation fails -> stop
-- validation fails -> stop
-- no matching PXE entry -> stop
-- multiple matching PXE entries -> stop
-- BootNext cannot be set or verified -> stop before provisioning is armed
-- failure after BootNext is set -> clear AI Forge's PXE BootNext when possible
-- failure after provisioning is armed -> reset mode to normal when possible
-- Ctrl-C during preparation -> perform the same fail-closed cleanup
-- termination during preparation -> perform the same fail-closed cleanup
+After inference and coding tools are installed, AI Forge performs full-stack validation.
 
-BootNext cleanup is itself restricted. AI Forge refuses to clear a BootNext
-setting belonging to a boot entry other than the machine's registered PXE
-entry.
+Current validation includes:
 
-Once the reboot request has successfully been issued, firmware owns the
-one-time BootNext transition and AI Forge no longer attempts to clear it.
+- approved kernel
+- NVIDIA GPU availability
+- inference service status
+- OpenAI-compatible model endpoint
+- chat completion
+- Aider coding smoke test
 
-The one-shot provisioning state is consumed by the controller when the target
-requests its provisioning PXE configuration.
+This validates that the machine is actually usable as an AI coding node rather than merely checking that packages were installed.
 
-## Console Behavior
+## Agent workspace
 
-Autoinstall directs installation and cloud-init output to log files rather than
-leaving verbose provisioning output on the normal console.
+The final development checkout is created after the node has passed the primary AI validation.
 
-The installed system should finish booting at a normal login prompt.
+For Daedalus:
 
-Detailed provisioning output remains available through system log files for
-diagnostics.
+```text
+/home/daedalus/graystone/ai-forge
+```
 
-## Athena Controller Recovery
+The workspace step validates:
 
-The Athena provisioning controller requires:
+- repository existence
+- expected Git remote
+- machine Git identity
+- clean working tree
 
-- provisioning interface with 10.10.10.1
-- dnsmasq
-- nginx
-- AI Forge boot controller
+Keeping workspace creation late in the lifecycle allows the underlying machine and AI stack to be validated independently.
 
-dnsmasq is configured with restart-on-failure protection because its initial
-startup may race with creation of the dedicated provisioning interface.
+## Agent development
 
-The Athena bootstrap/reproducibility workflow should eventually install and
-validate these system configurations automatically.
+Configured coding nodes expose an interactive agent interface through:
 
-## Future Work
+```bash
+./forge chat <machine>
+```
 
-### Headless Provisioning Observability
+For example:
 
-Track the full provisioning lifecycle, including:
+```bash
+./forge chat daedalus-01
+```
 
-    armed
-    PXE booted
-    installer started
-    storage
-    installing
-    installer complete
-    rebooting
-    SSH ready
-    complete
-    failed
+The current Daedalus implementation connects through the AI Forge management path and launches the coding interface under the `daedalus` identity.
 
-Provisioning should be considered complete only after the newly installed
-system boots and AI Forge management SSH succeeds.
+The current backend is Aider using Daedalus's local OpenAI-compatible inference service.
 
-### Host Identity After Reprovisioning
+When the development checkout is on `main`, the interface is intended to operate in analysis/ask mode.
 
-A successful bare-metal reprovision creates new SSH host keys.
+Editing is performed from a non-main development branch.
 
-AI Forge handles this transition intentionally:
+See:
 
-1. The existing host identity must be valid before provisioning begins.
-2. AI Forge removes the old host-key entry only after the destructive reboot
-   request has been successfully issued.
-3. The newly installed machine is expected to appear at its registered
-   provisioning IP.
-4. The first AI Forge readiness check after the known reprovision may accept
-   and record the new host key.
-5. Subsequent SSH connections require that recorded host key normally.
+```text
+docs/agent-architecture.md
+```
 
-AI Forge must not globally disable SSH host-key checking.
+## Provisioning design principles
 
-This first-contact trust model is acceptable for the isolated provisioning
-network but is not intended to be the final identity-attestation mechanism.
+AI Forge follows several core principles:
 
-Future provisioning observability may strengthen post-install host identity
-verification.
+- Git is the configuration source of truth.
+- Generated artifacts are disposable.
+- Machine identity is explicit.
+- PXE discovery is hardware-aware.
+- Destructive operations require explicit intent.
+- Lower-level capabilities remain independently usable.
+- High-level workflows compose lower-level capabilities.
+- Bare-metal installation and application configuration remain separate.
+- Machine agents have identities distinct from human and management accounts.
+- Secrets and machine-local generated state stay outside Git.
+- Validation checks usable outcomes, not merely installation success.
 
-## Managed Node Independence
-
-A normally installed AI Forge node must remain operational when its
-provisioning controller is unavailable.
-
-The provisioning Ethernet interface is a management interface, not a boot
-dependency.
-
-Managed nodes must therefore satisfy:
-
-- absence of Athena must not significantly delay normal OS boot;
-- the provisioning interface must not be marked boot-critical;
-- loss of provisioning DHCP must not prevent local login;
-- normal Internet connectivity should not depend on the provisioning
-  controller when another network path is configured.
-
-During testing, Ubuntu Autoinstall generated the following configuration on
-daedalus-01:
-
-    enp5s0:
-      critical: true
-      dhcp-identifier: "mac"
-      dhcp4: true
-
-With athena-01 powered off, systemd-networkd-wait-online waited 120 seconds and
-failed before boot continued.
-
-Post-install configuration must replace this behavior so the provisioning
-interface is optional/non-blocking.
-
-For daedalus-family systems, Wi-Fi will be configured during post-install
-automation and will provide independent Internet/default-route connectivity.
+The goal is for a machine to be reproducibly recoverable from its hardware identity, Git-managed configuration, and controller-side secret/runtime data.
