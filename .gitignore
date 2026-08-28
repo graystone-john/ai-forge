@@ -28,3 +28,6 @@ __pycache__/
 
 # Aider local state
 .aider*
+
+# Local Python virtual environments
+.venv/
