@@ -33,17 +33,9 @@ PY
 
 IP="${INFO[0]}"
 MAC="${INFO[1]}"
-SSH_USER="nispoe"
-SSH_KEY="$ROOT/secrets/ssh/id_ed25519_ai_forge"
-
 if [[ -z "$IP" || -z "$MAC" ]]; then
     echo "ERROR: $MACHINE requires provisioning_ip and provisioning_mac" >&2
     exit 3
-fi
-
-if [[ ! -f "$SSH_KEY" ]]; then
-    echo "ERROR: AI Forge SSH management key not found: $SSH_KEY" >&2
-    exit 4
 fi
 
 echo "Machine: $MACHINE"
@@ -52,17 +44,18 @@ echo "MAC:     $MAC"
 echo
 
 #
-# Don't send WOL if the machine is already SSH-ready.
+# Don't send WOL if the machine is already SSH-ready. Reuse check-machine
+# so readiness and SSH host trust follow the same policy as `forge status`.
 #
-if ssh \
-    -o BatchMode=yes \
-    -o ConnectTimeout=3 \
-    -o StrictHostKeyChecking=accept-new \
-    -i "$SSH_KEY" \
-    "$SSH_USER@$IP" true >/dev/null 2>&1; then
-
+if "$ROOT/scripts/check-machine" "$MACHINE" >/dev/null 2>&1; then
     echo "$MACHINE is already SSH-ready."
     exit 0
+else
+    CHECK_RC=$?
+    if [[ $CHECK_RC -eq 13 ]]; then
+        "$ROOT/scripts/check-machine" "$MACHINE" || true
+        exit 13
+    fi
 fi
 
 echo "Sending Wake-on-LAN..."
@@ -80,13 +73,7 @@ echo "Waiting for SSH..."
 #
 for attempt in $(seq 1 60); do
 
-    if ssh \
-        -o BatchMode=yes \
-        -o ConnectTimeout=2 \
-        -o StrictHostKeyChecking=accept-new \
-        -i "$SSH_KEY" \
-        "$SSH_USER@$IP" true >/dev/null 2>&1; then
-
+    if "$ROOT/scripts/check-machine" "$MACHINE" >/dev/null 2>&1; then
         echo
         echo
         echo "$MACHINE is SSH-ready."
@@ -94,6 +81,14 @@ for attempt in $(seq 1 60); do
 
         "$ROOT/scripts/check-machine" "$MACHINE"
         exit 0
+    else
+        CHECK_RC=$?
+        if [[ $CHECK_RC -eq 13 ]]; then
+            echo
+            echo
+            "$ROOT/scripts/check-machine" "$MACHINE" || true
+            exit 13
+        fi
     fi
 
     printf '.'
