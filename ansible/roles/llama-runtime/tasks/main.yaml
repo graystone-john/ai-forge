@@ -24,7 +24,6 @@
       - "--chown=root:root"
       - "--no-perms"
       - "--no-times"
-      - "--info=progress2"
   delegate_to: localhost
   become: false
 
@@ -86,16 +85,17 @@
     port: "{{ inference.port }}"
     timeout: 180
 
-- name: Wait for selected model to become ready
+- name: Allow inference model to finish loading
+  ansible.builtin.pause:
+    seconds: 5
+
+- name: Verify selected model is ready
   ansible.builtin.uri:
     url: "http://{{ inference.host }}:{{ inference.port }}/v1/models"
     method: GET
     return_content: true
     status_code: 200
   register: inference_models
-  retries: 60
-  delay: 5
-  until: inference_models.status == 200
 
 - name: Require selected model in inference API
   ansible.builtin.assert:
