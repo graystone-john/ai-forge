@@ -66,32 +66,74 @@ fi
 #
 # SSH authentication is the authoritative READY test.
 #
+# Do not allow an unauthenticated transient system (for example the live
+# installer) to populate the operator's permanent known_hosts file.
+#
 SSH_ERROR="$(mktemp)"
-trap 'rm -f "$SSH_ERROR"' EXIT
+SSH_KNOWN_TEMP="$(mktemp)"
+KNOWN_HOSTS="${HOME}/.ssh/known_hosts"
 
-if ssh \
-    -o BatchMode=yes \
-    -o ConnectTimeout=3 \
-    -o StrictHostKeyChecking=accept-new \
-    -i "$SSH_KEY" \
-    "$SSH_USER@$IP" true \
-    >/dev/null 2>"$SSH_ERROR"; then
+trap 'rm -f "$SSH_ERROR" "$SSH_KNOWN_TEMP"' EXIT
 
-    echo "SSH:     ready"
-    echo "State:   ready"
-    exit 0
-fi
+if [[ -f "$KNOWN_HOSTS" ]] &&
+   ssh-keygen -F "$IP" -f "$KNOWN_HOSTS" >/dev/null 2>&1; then
 
-if grep -Eq \
-    'REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed' \
-    "$SSH_ERROR"; then
+    #
+    # We already trust a key for this machine. Enforce it strictly.
+    #
+    if ssh \
+        -o BatchMode=yes \
+        -o ConnectTimeout=3 \
+        -o StrictHostKeyChecking=yes \
+        -o UserKnownHostsFile="$KNOWN_HOSTS" \
+        -i "$SSH_KEY" \
+        "$SSH_USER@$IP" true \
+        >/dev/null 2>"$SSH_ERROR"; then
 
-    echo "SSH:     host key mismatch"
-    echo "State:   host key changed"
-    echo
-    echo "Recovery:"
-    echo "  ssh-keygen -f ~/.ssh/known_hosts -R $IP"
-    exit 13
+        echo "SSH:     ready"
+        echo "State:   ready"
+        exit 0
+    fi
+
+    if grep -Eq \
+        'REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed' \
+        "$SSH_ERROR"; then
+
+        echo "SSH:     host key mismatch"
+        echo "State:   host key changed"
+        echo
+        echo "Recovery:"
+        echo "  ssh-keygen -f ~/.ssh/known_hosts -R $IP"
+        exit 13
+    fi
+else
+    #
+    # The host is not known yet. Use a temporary known_hosts file so a
+    # transient PXE/live-installer SSH server cannot poison permanent
+    # host-key state merely by answering before authentication succeeds.
+    #
+    if ssh \
+        -o BatchMode=yes \
+        -o ConnectTimeout=3 \
+        -o StrictHostKeyChecking=accept-new \
+        -o UserKnownHostsFile="$SSH_KNOWN_TEMP" \
+        -i "$SSH_KEY" \
+        "$SSH_USER@$IP" true \
+        >/dev/null 2>"$SSH_ERROR"; then
+
+        #
+        # Authentication with the AI Forge management key succeeded.
+        # Promote exactly the host key used for that successful connection.
+        #
+        mkdir -p "${HOME}/.ssh"
+        touch "$KNOWN_HOSTS"
+        chmod 600 "$KNOWN_HOSTS"
+        cat "$SSH_KNOWN_TEMP" >> "$KNOWN_HOSTS"
+
+        echo "SSH:     ready"
+        echo "State:   ready"
+        exit 0
+    fi
 fi
 
 echo "SSH:     not ready"
