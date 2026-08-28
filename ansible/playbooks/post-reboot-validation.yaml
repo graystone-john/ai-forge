@@ -27,6 +27,14 @@
       register: wifi_ipv4
       changed_when: false
 
+    - name: Require AI Node Wi-Fi IPv4 address
+      ansible.builtin.assert:
+        that:
+          - wifi_ipv4.stdout | trim | length > 0
+        fail_msg: >-
+          Wi-Fi interface {{ daedalus_network.wifi_interface }}
+          does not have an IPv4 address
+
     - name: Verify AI Node Internet connectivity
       ansible.builtin.command:
         cmd: "ping -I {{ daedalus_network.wifi_interface }} -c 2 -W 3 1.1.1.1"

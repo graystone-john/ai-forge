@@ -30,6 +30,12 @@
     status_code: 200
   register: validation_models
 
+- name: Require configured model is exposed
+  ansible.builtin.assert:
+    that:
+      - model.id in (validation_models.json.data | map(attribute='id') | list)
+    fail_msg: "Configured model {{ model.id }} is not exposed by the inference API"
+
 - name: Verify chat completion
   ansible.builtin.uri:
     url: "http://{{ inference.host }}:{{ inference.port }}/v1/chat/completions"
