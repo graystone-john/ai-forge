@@ -5,8 +5,44 @@ output:
 
 ssh_quiet_keygen: true
 
+bootcmd:
+  - |
+    cat > /run/systemd/system/ai-forge-snap-offline.service <<'EOF'
+    [Unit]
+    Description=Configure snapd Store offline for AI Forge provisioning
+    After=snapd.service
+    Requires=snapd.service
+
+    [Service]
+    Type=oneshot
+    ExecStart=/usr/bin/snap set system store.access=offline
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+  - systemctl daemon-reload
+  - systemctl start --no-block ai-forge-snap-offline.service
+
 autoinstall:
   version: 1
+
+  network:
+    version: 2
+    ethernets:
+      provisioning:
+        match:
+          macaddress: "{{ provisioning_mac }}"
+        dhcp4: true
+        dhcp6: false
+        dhcp4-overrides:
+          use-routes: false
+
+  source:
+    id: ubuntu-server-minimal
+
+  apt:
+    geoip: false
+    fallback: offline-install
 
   locale: en_US.UTF-8
 

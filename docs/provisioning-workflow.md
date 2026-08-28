@@ -477,6 +477,68 @@ See:
 docs/agent-architecture.md
 ```
 
+## Provisioning Performance and Offline Behavior
+
+AI Forge minimizes live-installer work while preserving a standard Ubuntu
+Autoinstall workflow and reproducible offline provisioning.
+
+The generated Autoinstall configuration uses the `ubuntu-server-minimal`
+installation source. Testing on daedalus-01 reduced the Curtin installation
+phase by approximately 23 seconds compared with the normal Ubuntu Server
+source.
+
+AI Forge publishes an intentionally empty NoCloud `vendor-data` file for each
+machine. Cloud-init probes this file even when no vendor-specific configuration
+is required. When the file was absent, cloud-init repeatedly received HTTP 404
+responses for approximately 10 seconds before continuing. Publishing the empty
+file eliminates that retry delay.
+
+During the live installer environment, AI Forge configures snapd with:
+
+    snap set system store.access=offline
+
+This is performed by a transient systemd service created by cloud-init
+`bootcmd`. The service exists only in the live environment and prevents snapd
+from attempting to contact the Snap Store during offline provisioning.
+Subiquity remains available because its local snap is not disabled. Testing
+reduced live-installer snap seeding from approximately 34 seconds to
+approximately 2 seconds.
+
+Autoinstall receives an explicit Netplan configuration for the provisioning
+interface. The physical interface is selected using the machine inventory's
+`provisioning_mac`; Linux interface names such as `enp5s0` are not encoded in
+the generic template.
+
+The provisioning interface uses DHCPv4, disables DHCPv6, and does not install
+DHCP-provided routes. This keeps the dedicated provisioning network from
+becoming the target's default Internet path.
+
+Before explicit network configuration, Subiquity spent approximately 21
+seconds discovering and reapplying live-installer networking on daedalus-01.
+With the provisioning interface selected explicitly by MAC, the corresponding
+network configuration phase completed in approximately 3 seconds.
+
+Measured installer-side improvements on daedalus-01 are approximately:
+
+    Minimal Ubuntu source                 23 seconds
+    Empty NoCloud vendor-data             10 seconds
+    Offline Snap Store                    32 seconds
+    Explicit provisioning network         18 seconds
+                                         ----------
+    Total measured reduction              83 seconds
+
+These measurements isolate individual installer phases and are intended as
+optimization baselines rather than guarantees for every machine. A later
+end-to-end test measured approximately 243 seconds from the provisioning
+command through the rebuilt machine presenting its new SSH identity. An older
+approximately 333-second measurement used a different measurement context, so
+the full difference between those results should not be attributed solely to
+the optimizations above.
+
+The performance changes also reinforce AI Forge's offline-first design:
+provisioning should use artifacts supplied by Athena and should not depend on
+successful access to public package, Snap, or other Internet services.
+
 ## Provisioning design principles
 
 AI Forge follows several core principles:

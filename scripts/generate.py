@@ -106,6 +106,16 @@ def main():
         generated[output_name] = output_file
         print(f"Generated {output_file}")
 
+    # Cloud-init's NoCloud datasource probes vendor-data even when no
+    # vendor-specific configuration is required. If the file is missing,
+    # cloud-init retries the HTTP request for roughly 10 seconds.
+    # Publishing an intentionally empty file avoids that unnecessary delay.
+    vendor_data_file = output_dir / "vendor-data"
+    vendor_data_file.write_text("", encoding="utf-8")
+
+    generated["vendor-data"] = vendor_data_file
+    print(f"Generated {vendor_data_file}")
+
     if args.deploy:
         machine_http = DATA_ROOT / "http" / machine_name
         machine_http.mkdir(parents=True, exist_ok=True)
@@ -138,6 +148,11 @@ def main():
             machine_http / "meta-data",
         )
 
+        shutil.copy2(
+            generated["vendor-data"],
+            machine_http / "vendor-data",
+        )
+
         print()
         print("Deployed:")
         print(f"  {DATA_ROOT / 'http' / 'boot.ipxe'}")
@@ -145,6 +160,8 @@ def main():
         print(f"  {machine_http / 'provision.ipxe'}")
         print(f"  {machine_http / 'user-data'}")
         print(f"  {machine_http / 'meta-data'}")
+        print(f"  {machine_http / 'vendor-data'}")
+
 
 if __name__ == "__main__":
     main()
