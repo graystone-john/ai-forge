@@ -112,6 +112,28 @@ autoinstall:
   late-commands:
     - curtin in-target --target=/target -- systemctl enable ssh.service
 
+    # Keep the installed system from waiting on the public Snap Store.
+    # snapd must be running before the setting can be applied, and this unit
+    # must complete before snapd.seeded.service enters the boot critical path.
+    - |
+      cat > /target/etc/systemd/system/ai-forge-snap-offline.service <<'EOF'
+      [Unit]
+      Description=Configure Snap Store offline for AI Forge
+      Requires=snapd.service
+      After=snapd.service
+      Before=snapd.seeded.service
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/bin/snap set system store.access=offline
+      RemainAfterExit=yes
+
+      [Install]
+      WantedBy=multi-user.target
+      EOF
+
+    - curtin in-target --target=/target -- systemctl enable ai-forge-snap-offline.service
+
     - mkdir -p /target/etc/ai-forge
 
     - |
