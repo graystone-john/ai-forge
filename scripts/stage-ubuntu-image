@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DATA_ROOT="${HOME}/graystone/provisioning-data"
+
+usage() {
+    echo "Usage: $0 <ubuntu-version>" >&2
+    exit 2
+}
+
+if [[ $# -ne 1 ]]; then
+    usage
+fi
+
+VERSION="$1"
+
+ISO_NAME="$(
+    python3 - "$ROOT/config/forge.yaml" "$VERSION" <<'PY'
+import sys
+import yaml
+
+config_file, version = sys.argv[1], sys.argv[2]
+
+with open(config_file, encoding="utf-8") as f:
+    config = yaml.safe_load(f)
+
+try:
+    print(config["images"]["ubuntu"][version]["iso"])
+except KeyError:
+    raise SystemExit(
+        f"ERROR: Ubuntu version {version!r} is not configured in {config_file}"
+    )
+PY
+)"
+
+IMAGE_DIR="$DATA_ROOT/images/ubuntu/$VERSION"
+HTTP_DIR="$DATA_ROOT/http/ubuntu/$VERSION"
+
+ISO_PATH="$IMAGE_DIR/$ISO_NAME"
+CHECKSUM_FILE="$IMAGE_DIR/SHA256SUMS"
+
+if [[ ! -f "$ISO_PATH" ]]; then
+    echo "ERROR: Ubuntu ISO not found:" >&2
+    echo "  $ISO_PATH" >&2
+    exit 3
+fi
+
+if [[ ! -f "$CHECKSUM_FILE" ]]; then
+    echo "ERROR: SHA256SUMS not found:" >&2
+    echo "  $CHECKSUM_FILE" >&2
+    exit 3
+fi
+
+if ! command -v xorriso >/dev/null 2>&1; then
+    echo "ERROR: xorriso is required to stage Ubuntu boot files." >&2
+    exit 4
+fi
+
+EXPECTED="$(
+    awk -v name="$ISO_NAME" '
+        $2 == "*" name || $2 == name {
+            print $1
+            exit
+        }
+    ' "$CHECKSUM_FILE"
+)"
+
+if [[ -z "$EXPECTED" ]]; then
+    echo "ERROR: No checksum found for $ISO_NAME in:" >&2
+    echo "  $CHECKSUM_FILE" >&2
+    exit 5
+fi
+
+echo "Ubuntu version: $VERSION"
+echo "ISO:            $ISO_NAME"
+echo
+echo "Verifying ISO checksum..."
+
+ACTUAL="$(sha256sum "$ISO_PATH" | awk '{print $1}')"
+
+if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+    echo "ERROR: ISO checksum mismatch." >&2
+    echo "Expected: $EXPECTED" >&2
+    echo "Actual:   $ACTUAL" >&2
+    exit 6
+fi
+
+echo "ISO checksum: PASS"
+
+mkdir -p "$HTTP_DIR"
+
+STAGE_DIR="$(mktemp -d "$HTTP_DIR/.stage.XXXXXX")"
+
+cleanup() {
+    rm -rf "$STAGE_DIR"
+}
+
+trap cleanup EXIT
+
+echo
+echo "Extracting PXE boot files..."
+
+xorriso \
+    -osirrox on \
+    -indev "$ISO_PATH" \
+    -extract /casper/vmlinuz "$STAGE_DIR/vmlinuz" \
+    >/dev/null 2>&1
+
+xorriso \
+    -osirrox on \
+    -indev "$ISO_PATH" \
+    -extract /casper/initrd "$STAGE_DIR/initrd" \
+    >/dev/null 2>&1
+
+if [[ ! -s "$STAGE_DIR/vmlinuz" ]]; then
+    echo "ERROR: Extracted vmlinuz is missing or empty." >&2
+    exit 7
+fi
+
+if [[ ! -s "$STAGE_DIR/initrd" ]]; then
+    echo "ERROR: Extracted initrd is missing or empty." >&2
+    exit 7
+fi
+
+chmod 0444 \
+    "$STAGE_DIR/vmlinuz" \
+    "$STAGE_DIR/initrd"
+
+VMLINUX_SHA="$(sha256sum "$STAGE_DIR/vmlinuz" | awk '{print $1}')"
+INITRD_SHA="$(sha256sum "$STAGE_DIR/initrd" | awk '{print $1}')"
+
+#
+# Each mv is atomic because the staging directory lives on the same
+# filesystem as the final HTTP directory.
+#
+mv -f "$STAGE_DIR/vmlinuz" "$HTTP_DIR/vmlinuz"
+mv -f "$STAGE_DIR/initrd" "$HTTP_DIR/initrd"
+
+#
+# The ISO remains authoritative in the image archive. HTTP exposes it
+# through a symlink rather than maintaining a second multi-gigabyte copy.
+#
+ln -sfn "$ISO_PATH" "$HTTP_DIR/$ISO_NAME"
+
+echo
+echo "Staging complete:"
+echo "  $HTTP_DIR/vmlinuz"
+echo "  $HTTP_DIR/initrd"
+echo "  $HTTP_DIR/$ISO_NAME -> $ISO_PATH"
+echo
+echo "Checksums:"
+echo "  vmlinuz  $VMLINUX_SHA"
+echo "  initrd   $INITRD_SHA"
