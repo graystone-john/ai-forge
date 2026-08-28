@@ -213,6 +213,14 @@
     msg:
       - "Aider: {{ aider_version.stdout }}"
 
+- name: Install AI Forge agent chat wrapper
+  ansible.builtin.template:
+    src: ai-forge-agent-chat.j2
+    dest: /usr/local/bin/ai-forge-agent-chat
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Install Aider configuration for agent identity
   ansible.builtin.template:
     src: aider.conf.yml.j2
@@ -231,3 +239,13 @@
     that:
       - aider_config_file.stat.exists
     fail_msg: "Aider configuration was not installed"
+
+- name: Allow AI Forge management account to launch agent chat
+  ansible.builtin.template:
+    src: ai-forge-agent-chat.sudoers.j2
+    dest: /etc/sudoers.d/ai-forge-agent-chat
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "/usr/sbin/visudo -cf %s"
+

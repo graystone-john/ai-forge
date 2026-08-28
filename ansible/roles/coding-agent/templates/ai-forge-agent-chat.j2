@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+AGENT_USER="{{ agent_identity.user }}"
+WORKSPACE="/home/{{ agent_identity.user }}/graystone/ai-forge"
+
+if [[ ! -d "$WORKSPACE/.git" ]]; then
+    echo "ERROR: Agent workspace is not initialized: $WORKSPACE" >&2
+    exit 10
+fi
+
+echo "AI Forge — {{ agent_identity.name }}"
+echo "Workspace: $WORKSPACE"
+echo "Backend:   Aider"
+echo
+
+exec sudo -u "$AGENT_USER" -H bash -lc "
+    cd '$WORKSPACE'
+    exec aider
+"

@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 <machine>"
+    exit 2
+fi
+
+MACHINE="$1"
+MACHINE_FILE="$ROOT/machines/$MACHINE/machine.yaml"
+
+if [[ ! -f "$MACHINE_FILE" ]]; then
+    echo "ERROR: Unknown machine: $MACHINE" >&2
+    exit 3
+fi
+
+IP="$(
+    python3 - "$MACHINE_FILE" <<'PY'
+import sys
+import yaml
+
+with open(sys.argv[1], encoding="utf-8") as f:
+    machine = yaml.safe_load(f)
+
+print(machine.get("network", {}).get("provisioning_ip", ""))
+PY
+)"
+
+if [[ -z "$IP" ]]; then
+    echo "ERROR: No provisioning_ip configured for $MACHINE" >&2
+    exit 3
+fi
+
+SSH_KEY="$ROOT/secrets/ssh/id_ed25519_ai_forge"
+
+echo "AI Forge agent chat"
+echo "Machine: $MACHINE"
+echo "IP:      $IP"
+echo
+
+exec ssh -tt \
+    -o BatchMode=yes \
+    -o StrictHostKeyChecking=accept-new \
+    -i "$SSH_KEY" \
+    "ai-forge@$IP" \
+    sudo -n /usr/local/bin/ai-forge-agent-chat

@@ -25,3 +25,6 @@ generated/
 # Python cache
 __pycache__/
 *.py[cod]
+
+# Aider local state
+.aider*

@@ -11,6 +11,7 @@ if [[ $# -lt 1 ]]; then
     echo "  ./forge wake <machine>"
     echo "  ./forge deploy <machine>"
     echo "  ./forge boot <machine> {status|pxe-next|clear-next|reboot|poweroff}"
+    echo "  ./forge chat <machine>"
     echo "  ./forge provision <machine>"
     exit 2
 fi
@@ -63,6 +64,14 @@ case "$COMMAND" in
         exec "$ROOT/scripts/boot-machine" "$1" "$2"
         ;;
 
+    chat)
+        if [[ $# -ne 1 ]]; then
+            echo "Usage: ./forge chat <machine>"
+            exit 2
+        fi
+        exec "$ROOT/scripts/chat-machine" "$1"
+        ;;
+
     provision)
         if [[ $# -ne 1 ]]; then
             echo "Usage: ./forge provision <machine>"
@@ -81,6 +90,7 @@ case "$COMMAND" in
         echo "  wake <machine>"
         echo "  deploy <machine>"
         echo "  boot <machine> {status|pxe-next|clear-next|reboot|poweroff}"
+        echo "  chat <machine>"
         echo "  provision <machine>"
         exit 2
         ;;
