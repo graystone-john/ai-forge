@@ -34,7 +34,20 @@ if [[ -z "$IP" ]]; then
 fi
 
 SSH_KEY="$ROOT/secrets/ssh/id_ed25519_ai_forge"
+KNOWN_HOSTS="${HOME}/.ssh/known_hosts"
 
+#
+# Establish SSH readiness and host trust through the same lifecycle used by
+# `forge status`. An unknown host key is only persisted after successful
+# authentication with the AI Forge management key.
+#
+if ! "$ROOT/scripts/check-machine" "$MACHINE"; then
+    echo >&2
+    echo "ERROR: $MACHINE is not ready for agent chat." >&2
+    exit 10
+fi
+
+echo
 echo "AI Forge agent chat"
 echo "Machine: $MACHINE"
 echo "IP:      $IP"
@@ -42,7 +55,8 @@ echo
 
 exec ssh -tt \
     -o BatchMode=yes \
-    -o StrictHostKeyChecking=accept-new \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile="$KNOWN_HOSTS" \
     -i "$SSH_KEY" \
     "ai-forge@$IP" \
     sudo -n /usr/local/bin/ai-forge-agent-chat
