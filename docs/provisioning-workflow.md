@@ -482,11 +482,6 @@ docs/agent-architecture.md
 AI Forge minimizes live-installer work while preserving a standard Ubuntu
 Autoinstall workflow and reproducible offline provisioning.
 
-The generated Autoinstall configuration uses the `ubuntu-server-minimal`
-installation source. Testing on daedalus-01 reduced the Curtin installation
-phase by approximately 23 seconds compared with the normal Ubuntu Server
-source.
-
 AI Forge publishes an intentionally empty NoCloud `vendor-data` file for each
 machine. Cloud-init probes this file even when no vendor-specific configuration
 is required. When the file was absent, cloud-init repeatedly received HTTP 404
@@ -504,40 +499,77 @@ Subiquity remains available because its local snap is not disabled. Testing
 reduced live-installer snap seeding from approximately 34 seconds to
 approximately 2 seconds.
 
-Autoinstall receives an explicit Netplan configuration for the provisioning
-interface. The physical interface is selected using the machine inventory's
-`provisioning_mac`; Linux interface names such as `enp5s0` are not encoded in
-the generic template.
+The installed target also configures Snap Store access offline so that boot does
+not wait for an unavailable public Snap Store. This reduced the observed
+`snapd.seeded` boot delay from approximately 33 seconds to effectively
+negligible time.
 
-The provisioning interface uses DHCPv4, disables DHCPv6, and does not install
-DHCP-provided routes. This keeps the dedicated provisioning network from
-becoming the target's default Internet path.
+APT geo-IP lookup is disabled and Autoinstall is configured to permit its
+offline package fallback. These settings avoid unnecessary dependence on
+Internet services during provisioning.
 
-Before explicit network configuration, Subiquity spent approximately 21
-seconds discovering and reapplying live-installer networking on daedalus-01.
-With the provisioning interface selected explicitly by MAC, the corresponding
-network configuration phase completed in approximately 3 seconds.
+### Rejected installer optimizations
 
-Measured installer-side improvements on daedalus-01 are approximately:
+Two additional optimizations were tested on daedalus-01 and deliberately
+removed after full bare-metal regression testing exposed changes to the
+installed operating system.
 
-    Minimal Ubuntu source                 23 seconds
-    Empty NoCloud vendor-data             10 seconds
-    Offline Snap Store                    32 seconds
-    Explicit provisioning network         18 seconds
-                                         ----------
-    Total measured reduction              83 seconds
+Selecting the explicit Autoinstall source `ubuntu-server-minimal` reduced the
+Curtin installation phase by approximately 23 seconds, but the resulting target
+did not contain baseline utilities expected by AI Forge, including `git` and
+`rsync`. AI Forge therefore leaves the Ubuntu installation source at
+Subiquity's default selection.
 
-These measurements isolate individual installer phases and are intended as
-optimization baselines rather than guarantees for every machine. A later
-end-to-end test measured approximately 243 seconds from the provisioning
-command through the rebuilt machine presenting its new SSH identity. An older
-approximately 333-second measurement used a different measurement context, so
-the full difference between those results should not be attributed solely to
-the optimizations above.
+Providing an explicit Autoinstall `network:` configuration selected the
+provisioning Ethernet interface by MAC and reduced an observed installer
+network phase from approximately 21 seconds to approximately 3 seconds.
+However, the resulting target omitted packages required by the established
+post-install Wi-Fi path, including `wpasupplicant` and `libpcsclite1`. The
+network role could generate valid Wi-Fi Netplan configuration, but the target
+could not associate because the required supplicant was absent.
 
-The performance changes also reinforce AI Forge's offline-first design:
-provisioning should use artifacts supplied by Athena and should not depend on
-successful access to public package, Snap, or other Internet services.
+Removing the explicit Autoinstall `network:` block restored Ubuntu's normal
+target package selection. On a fresh daedalus-01 installation, `git`, `curl`,
+`rsync`, `wpasupplicant`, and `libpcsclite1` were present, the provisioning
+Ethernet remained functional, and the existing AI Forge network role restored
+Wi-Fi and Internet connectivity after configuration and reboot.
+
+These results establish an important provisioning rule: an installer
+optimization is not considered successful merely because installation becomes
+faster or reaches SSH successfully. Changes to Subiquity source selection,
+network configuration, package behavior, or other installer inputs can alter
+the contents and capabilities of the installed target.
+
+Provisioning changes must therefore be validated through the complete AI Forge
+reconstruction path:
+
+    bare-metal installation
+      -> management SSH
+      -> expected baseline packages
+      -> provisioning Ethernet
+      -> approved kernel
+      -> NVIDIA
+      -> Wi-Fi association and IPv4
+      -> default Internet route and DNS
+      -> agent identity and credentials
+      -> inference
+      -> coding tools
+      -> workspace
+      -> forge chat
+
+Only optimizations that preserve that complete path should become part of the
+standard provisioning configuration.
+
+The retained measured installer-side improvements include approximately 10
+seconds from publishing empty NoCloud `vendor-data` and approximately 32
+seconds from preventing live-installer Snap Store access. Additional installed
+system startup time is saved by keeping Snap Store access offline on the
+offline-first target. Measurements are optimization baselines rather than
+guarantees for every machine or Ubuntu release.
+
+The performance work reinforces AI Forge's offline-first design: provisioning
+should use artifacts supplied by Athena and should not depend on successful
+access to public package, Snap, or other Internet services.
 
 ## Provisioning design principles
 
