@@ -23,3 +23,6 @@ agent_identity:
 agent_credentials:
   github_private_key: "{{ playbook_dir }}/../../secrets/agents/daedalus/id_ed25519_github"
   github_public_key: "{{ playbook_dir }}/../../secrets/agents/daedalus/id_ed25519_github.pub"
+
+agent_workspace:
+  repository: git@github.com:graystone-john/ai-forge.git
