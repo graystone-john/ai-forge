@@ -1,5 +1,6 @@
 ---
 coding_agent:
   aider_version: "0.86.2"
-  source: "/home/nispoe/graystone/provisioning-data/python/aider-0.86.2"
-  python_venv_source: "/home/nispoe/graystone/provisioning-data/packages/python-venv-3.12"
+  python_version: "3.12"
+
+  apt_repository: "http://10.10.10.1:81/ai-stores/vault/linux/ubuntu/apt"

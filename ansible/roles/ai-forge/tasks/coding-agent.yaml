@@ -1,13 +1,9 @@
 ---
-- name: Define coding-agent artifact paths
+- name: Define coding-agent paths
   ansible.builtin.set_fact:
-    aider_src: "{{ coding_agent.source }}"
-    python_venv_src: "{{ coding_agent.python_venv_source }}"
-
     ai_forge_root: "/opt/ai-forge"
-    aider_cache_dst: "/opt/ai-forge/python/aider-{{ coding_agent.aider_version }}"
-    python_venv_dst: "/opt/ai-forge/packages/python-venv-3.12"
     aider_venv: "/opt/ai-forge/venvs/aider-{{ coding_agent.aider_version }}"
+    ai_stores_apt_source: "/etc/apt/sources.list.d/90-graystone-ai-stores-coding.list"
 
 - name: Create AI Forge coding-agent directories
   ansible.builtin.file:
@@ -18,134 +14,92 @@
     mode: "0755"
   loop:
     - "{{ ai_forge_root }}"
-    - "/opt/ai-forge/python"
-    - "{{ aider_cache_dst }}"
-    - "/opt/ai-forge/packages"
-    - "{{ python_venv_dst }}"
     - "/opt/ai-forge/venvs"
 
-- name: Record Aider wheelhouse transfer start
-  ansible.builtin.set_fact:
-    aider_transfer_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
-    aider_transfer_start_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+- name: Install dedicated AI Stores APT source for coding tools
+  ansible.builtin.copy:
+    dest: "{{ ai_stores_apt_source }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      deb [trusted=yes] {{ coding_agent.apt_repository }} noble main
 
-- name: Report Aider wheelhouse transfer start
-  ansible.builtin.debug:
-    msg: >-
-      AI Forge: Aider wheelhouse transfer started at
-      {{ aider_transfer_start_time }}.
-
-- name: Copy Aider wheelhouse to AI Node
-  ansible.posix.synchronize:
-    src: "{{ aider_src }}/"
-    dest: "{{ aider_cache_dst }}/"
-    archive: false
-    recursive: true
-    checksum: true
-    rsync_path: "sudo -n rsync"
-    rsync_opts:
-      - "--chown=root:root"
-      - "--no-perms"
-      - "--no-times"
-  delegate_to: localhost
-  become: false
-
-- name: Record Aider wheelhouse transfer completion
-  ansible.builtin.set_fact:
-    aider_transfer_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
-    aider_transfer_end_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
-
-- name: Report Aider wheelhouse transfer complete
-  ansible.builtin.debug:
-    msg: >-
-      AI Forge: Aider wheelhouse transfer completed at
-      {{ aider_transfer_end_time }}.
-      Elapsed: {{
-        (aider_transfer_end_epoch | int) -
-        (aider_transfer_start_epoch | int)
-      }} seconds.
-
-- name: Record Python venv bundle transfer start
-  ansible.builtin.set_fact:
-    python_venv_transfer_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
-    python_venv_transfer_start_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
-
-- name: Report Python venv bundle transfer start
-  ansible.builtin.debug:
-    msg: >-
-      AI Forge: Python venv package bundle transfer started at
-      {{ python_venv_transfer_start_time }}.
-
-- name: Copy Python venv package bundle to AI Node
-  ansible.posix.synchronize:
-    src: "{{ python_venv_src }}/"
-    dest: "{{ python_venv_dst }}/"
-    archive: false
-    recursive: true
-    checksum: true
-    rsync_path: "sudo -n rsync"
-    rsync_opts:
-      - "--chown=root:root"
-      - "--no-perms"
-      - "--no-times"
-  delegate_to: localhost
-  become: false
-
-- name: Record Python venv bundle transfer completion
-  ansible.builtin.set_fact:
-    python_venv_transfer_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
-    python_venv_transfer_end_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
-
-- name: Report Python venv bundle transfer complete
-  ansible.builtin.debug:
-    msg: >-
-      AI Forge: Python venv package bundle transfer completed at
-      {{ python_venv_transfer_end_time }}.
-      Elapsed: {{
-        (python_venv_transfer_end_epoch | int) -
-        (python_venv_transfer_start_epoch | int)
-      }} seconds.
-
-- name: Verify Python venv package bundle checksums
+- name: Refresh AI Stores APT metadata only
   ansible.builtin.command:
-    cmd: sha256sum -c ../meta/SHA256SUMS
-    chdir: "{{ python_venv_dst }}/packages"
+    argv:
+      - apt-get
+      - -o
+      - "Dir::Etc::sourcelist={{ ai_stores_apt_source }}"
+      - -o
+      - "Dir::Etc::sourceparts=-"
+      - -o
+      - "APT::Get::List-Cleanup=0"
+      - update
   changed_when: false
 
-- name: Check whether python3.12-venv is installed
+- name: Check whether Python venv support is installed
   ansible.builtin.command:
     argv:
       - dpkg-query
       - -W
-      - -f=${Status}
-      - python3.12-venv
-  register: venv_package_status
+      - "-f=${Status}"
+      - "python{{ coding_agent.python_version }}-venv"
+  register: python_venv_package_status
   changed_when: false
   failed_when: false
 
-- name: Install Python venv support from offline package bundle
-  ansible.builtin.shell: |
-    set -euo pipefail
-    dpkg -i "{{ python_venv_dst }}"/packages/*.deb
-  args:
-    executable: /bin/bash
-  when: "'install ok installed' not in venv_package_status.stdout"
+- name: Install Python venv support from AI Stores only
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - -y
+      - -o
+      - "Dir::Etc::sourcelist={{ ai_stores_apt_source }}"
+      - -o
+      - "Dir::Etc::sourceparts=-"
+      - install
+      - "python{{ coding_agent.python_version }}-venv"
+  when: "'install ok installed' not in python_venv_package_status.stdout"
 
 - name: Check existing Aider virtual environment
   ansible.builtin.stat:
-    path: "{{ aider_venv }}/bin/pip"
-  register: aider_venv_pip
+    path: "{{ aider_venv }}/bin/python"
+  register: aider_venv_python
 
 - name: Remove incomplete Aider virtual environment
   ansible.builtin.file:
     path: "{{ aider_venv }}"
     state: absent
-  when: not aider_venv_pip.stat.exists
+  when: not aider_venv_python.stat.exists
 
 - name: Create Aider virtual environment
   ansible.builtin.command:
-    cmd: python3 -m venv "{{ aider_venv }}"
+    argv:
+      - "python{{ coding_agent.python_version }}"
+      - -m
+      - venv
+      - "{{ aider_venv }}"
     creates: "{{ aider_venv }}/bin/python"
+
+- name: Inspect effective pip configuration
+  ansible.builtin.command:
+    argv:
+      - "{{ aider_venv }}/bin/python"
+      - -m
+      - pip
+      - config
+      - list
+  register: aider_pip_config
+  changed_when: false
+
+- name: Require no configured secondary pip repository
+  ansible.builtin.assert:
+    that:
+      - "'extra-index-url' not in aider_pip_config.stdout"
+    fail_msg: >-
+      A secondary pip index is configured.
+      AI Stores provenance cannot be guaranteed.
 
 - name: Record Aider installation start
   ansible.builtin.set_fact:
@@ -157,20 +111,23 @@
     msg: >-
       AI Forge: Aider {{ coding_agent.aider_version }} installation
       started at {{ aider_install_start_time }}.
-      Installing from the offline wheelhouse.
+      Resolving recursively from Graystone AI Stores PyPI.
 
-- name: Install Aider from offline wheelhouse
+- name: Install Aider from Graystone AI Stores PyPI
   ansible.builtin.command:
     argv:
       - "{{ aider_venv }}/bin/python"
       - -m
       - pip
       - install
-      - --no-index
-      - --find-links
-      - "{{ aider_cache_dst }}/wheels"
-      - -r
-      - "{{ aider_cache_dst }}/meta/requirements.lock"
+      - --index-url
+      - "{{ ai_stores.pypi_index_url }}"
+      - --trusted-host
+      - "{{ ai_stores.trusted_host }}"
+      - --disable-pip-version-check
+      - "aider-chat=={{ coding_agent.aider_version }}"
+  environment:
+    PIP_NO_INDEX: ""
   register: aider_install
   changed_when: "'Successfully installed' in aider_install.stdout"
 
