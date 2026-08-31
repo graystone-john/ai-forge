@@ -30,5 +30,6 @@ agent_workspace:
   repository: git@github.com:graystone-john/ai-forge.git
 
 ai_stores:
+  base_url: "http://10.10.10.1:81/ai-stores"
   pypi_index_url: "http://10.10.10.1:81/ai-stores/vault/python/pypi/simple/"
   trusted_host: "10.10.10.1"

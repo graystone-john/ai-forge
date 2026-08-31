@@ -1,0 +1,13 @@
+---
+- name: Upgrade Hermes Agent to large context
+  hosts: local_ai_coding_node
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - "../profiles/inference/{{ inference_profile }}.yaml"
+
+  roles:
+    - role: ai-forge
+      vars:
+        ai_forge_stage: hermes-agent-large-context

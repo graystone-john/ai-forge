@@ -1,0 +1,154 @@
+---
+- name: Require Hermes large-context configuration
+  ansible.builtin.assert:
+    that:
+      - inference is defined
+      - inference.context_size is defined
+      - hermes_agent is defined
+      - agent_identity is defined
+    fail_msg: "Inference, Hermes Agent, and agent identity configuration must be defined"
+
+- name: Define Hermes large-context target
+  ansible.builtin.set_fact:
+    hermes_large_context_size: 131072
+    hermes_root: "/opt/ai-forge/hermes-agent/{{ hermes_agent.version }}"
+
+- name: Require Hermes base installation
+  ansible.builtin.stat:
+    path: /usr/local/bin/hermes
+  register: hermes_large_context_command
+
+- name: Require installed Hermes base
+  ansible.builtin.assert:
+    that:
+      - hermes_large_context_command.stat.exists
+      - hermes_large_context_command.stat.executable
+    fail_msg: >-
+      Hermes base installation is missing.
+      Run playbooks/hermes-agent.yaml first.
+
+- name: Define Muse Glimmer DFlash paths
+  ansible.builtin.set_fact:
+    hermes_dflash_dir: "/opt/ai-forge/models/muse-glimmer-30b"
+    hermes_dflash_file: "dflash-Muse-Glimmer-30B-Q4_K_M.gguf"
+    hermes_dflash_sha256: "b2e808bf656086fe86bd0d0bd990f01d33e377537a07c02d45371517c8b264ef"
+    hermes_dflash_revision: "70bf1b61ac09f91b24d39038091b41c582bc5d7a"
+
+- name: Create Muse Glimmer DFlash directory
+  ansible.builtin.file:
+    path: "{{ hermes_dflash_dir }}"
+    state: directory
+    owner: daedalus
+    group: daedalus
+    mode: "0755"
+
+- name: Download Muse Glimmer DFlash model from AI Stores
+  ansible.builtin.get_url:
+    url: >-
+      {{ ai_stores.base_url }}/vault/huggingface/meta-models/Muse-Glimmer-30B-GGUF/revisions/{{
+      hermes_dflash_revision }}/{{ hermes_dflash_file }}
+    dest: "{{ hermes_dflash_dir }}/{{ hermes_dflash_file }}"
+    checksum: "sha256:{{ hermes_dflash_sha256 }}"
+    owner: daedalus
+    group: daedalus
+    mode: "0644"
+
+- name: Define large-context inference configuration
+  ansible.builtin.set_fact:
+    hermes_large_context_inference: >-
+      {{ inference | combine({
+        'context_size': hermes_large_context_size,
+        'dflash_enabled': true,
+        'dflash_model': hermes_dflash_dir ~ '/' ~ hermes_dflash_file,
+        'dflash_n_max': 15
+      }) }}
+
+- name: Install large-context inference service
+  ansible.builtin.template:
+    src: ai-forge-inference.service.j2
+    dest: /etc/systemd/system/ai-forge-inference.service
+    owner: root
+    group: root
+    mode: "0644"
+  vars:
+    inference: "{{ hermes_large_context_inference }}"
+  register: hermes_large_context_service
+
+- name: Reload systemd for large-context inference service
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: hermes_large_context_service.changed
+
+- name: Restart inference service for large context
+  ansible.builtin.systemd:
+    name: ai-forge-inference.service
+    state: restarted
+  when: hermes_large_context_service.changed
+
+- name: Ensure inference service is running
+  ansible.builtin.systemd:
+    name: ai-forge-inference.service
+    state: started
+    enabled: true
+
+- name: Wait for large-context inference endpoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:8080/v1/models"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ hermes_agent.model.api_key }}"
+    status_code: 200
+  register: hermes_large_context_endpoint
+  retries: 60
+  delay: 2
+  until: hermes_large_context_endpoint.status == 200
+
+- name: Verify live inference context
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+      pid="$(pgrep -x llama | head -1)"
+      tr '\0' ' ' < "/proc/${pid}/cmdline"
+  register: hermes_large_context_cmdline
+  changed_when: false
+
+- name: Require live 131072-token inference context and DFlash
+  ansible.builtin.assert:
+    that:
+      - "'--ctx-size ' ~ (hermes_large_context_size | string) in hermes_large_context_cmdline.stdout"
+      - "'--spec-type draft-dflash' in hermes_large_context_cmdline.stdout"
+      - "'--spec-draft-n-max 15' in hermes_large_context_cmdline.stdout"
+    fail_msg: >-
+      Live inference server is not using the required
+      {{ hermes_large_context_size }} context with Muse Glimmer DFlash.
+
+- name: Install Hermes large-context model configuration
+  ansible.builtin.copy:
+    dest: "/home/{{ agent_identity.user }}/.hermes/config.yaml"
+    owner: "{{ agent_identity.user }}"
+    group: "{{ agent_identity.user }}"
+    mode: "0600"
+    content: |
+      model:
+        provider: "{{ hermes_agent.model.provider }}"
+        default: "{{ hermes_agent.model.default }}"
+        base_url: "{{ hermes_agent.model.base_url }}"
+        api_mode: "{{ hermes_agent.model.api_mode }}"
+        context_length: {{ hermes_large_context_size }}
+
+- name: Verify Hermes large-context configuration
+  ansible.builtin.command:
+    argv:
+      - grep
+      - -F
+      - "context_length: {{ hermes_large_context_size }}"
+      - "/home/{{ agent_identity.user }}/.hermes/config.yaml"
+  changed_when: false
+
+- name: Report Hermes large-context state
+  ansible.builtin.debug:
+    msg:
+      - "Hermes context: {{ hermes_large_context_size }}"
+      - "Muse Glimmer context: {{ hermes_large_context_size }}"
+      - "Inference: {{ hermes_large_context_cmdline.stdout | trim }}"

@@ -1,0 +1,898 @@
+---
+- name: Require Hermes Agent configuration
+  ansible.builtin.assert:
+    that:
+      - hermes_agent is defined
+      - ai_stores.base_url is defined
+      - ai_stores.pypi_index_url is defined
+      - ai_stores.trusted_host is defined
+    fail_msg: "Hermes Agent and AI Stores configuration must be defined"
+
+- name: Require Hermes target architecture
+  ansible.builtin.assert:
+    that:
+      - ansible_architecture in ["x86_64", "amd64"]
+    fail_msg: >-
+      Hermes Agent {{ hermes_agent.version }} AI Stores artifacts are
+      currently curated for linux-x86_64/amd64 only.
+      Target architecture is {{ ansible_architecture }}.
+
+- name: Define Hermes Agent paths
+  ansible.builtin.set_fact:
+    hermes_root: "/opt/ai-forge/hermes-agent/{{ hermes_agent.version }}"
+    hermes_cache: "/opt/ai-forge/cache/hermes-agent/{{ hermes_agent.version }}"
+    hermes_source: "/opt/ai-forge/hermes-agent/{{ hermes_agent.version }}/source"
+    hermes_python_root: "/opt/ai-forge/hermes-agent/{{ hermes_agent.version }}/python"
+    hermes_node_root: "/opt/ai-forge/hermes-agent/{{ hermes_agent.version }}/node"
+    hermes_uv_root: "/opt/ai-forge/hermes-agent/{{ hermes_agent.version }}/uv"
+    hermes_playwright_root: "/opt/ai-forge/hermes-agent/{{ hermes_agent.version }}/playwright"
+    hermes_npm_tarballs: "/opt/ai-forge/cache/hermes-agent/{{ hermes_agent.version }}/npm"
+    hermes_apt_source: "/etc/apt/sources.list.d/91-graystone-ai-stores-hermes.list"
+
+- name: Create Hermes Agent directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ hermes_root }}"
+    - "{{ hermes_cache }}"
+    - "{{ hermes_source }}"
+    - "{{ hermes_python_root }}"
+    - "{{ hermes_node_root }}"
+    - "{{ hermes_uv_root }}"
+    - "{{ hermes_playwright_root }}"
+    - "{{ hermes_npm_tarballs }}"
+
+- name: Install dedicated AI Stores APT source for Hermes
+  ansible.builtin.copy:
+    dest: "{{ hermes_apt_source }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      deb [trusted=yes] {{ coding_agent.apt_repository }} noble main
+
+- name: Refresh Hermes AI Stores APT metadata
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - -o
+      - "Dir::Etc::sourcelist={{ hermes_apt_source }}"
+      - -o
+      - "Dir::Etc::sourceparts=-"
+      - -o
+      - "APT::Get::List-Cleanup=0"
+      - update
+  changed_when: false
+
+- name: Record Hermes installation start
+  ansible.builtin.set_fact:
+    hermes_install_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    hermes_install_start_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report Hermes installation start
+  ansible.builtin.debug:
+    msg: >-
+      AI_FORGE_INSTALL_START name=hermes-agent-{{ hermes_agent.version }}
+      time={{ hermes_install_start_time }}
+
+#
+# Source
+#
+
+- name: Download Hermes source archive from AI Stores
+  ansible.builtin.get_url:
+    url: >-
+      {{ ai_stores.base_url }}/vault/github/NousResearch/hermes-agent/archive/{{
+      hermes_agent.commit }}.tar.gz
+    dest: "{{ hermes_cache }}/hermes-agent-{{ hermes_agent.commit }}.tar.gz"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Extract Hermes source
+  ansible.builtin.unarchive:
+    src: "{{ hermes_cache }}/hermes-agent-{{ hermes_agent.commit }}.tar.gz"
+    dest: "{{ hermes_source }}"
+    remote_src: true
+    extra_opts:
+      - --strip-components=1
+    creates: "{{ hermes_source }}/pyproject.toml"
+
+- name: Verify Hermes project version
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - >-
+        import tomllib;
+        d=tomllib.load(open("{{ hermes_source }}/pyproject.toml","rb"));
+        assert d["project"]["version"] == "{{ hermes_agent.version }}",
+        d["project"]["version"]
+  changed_when: false
+
+#
+# Python 3.11.16
+#
+
+- name: Download Hermes Python runtime from AI Stores
+  ansible.builtin.get_url:
+    url: >-
+      {{ ai_stores.base_url }}/vault/python/runtimes/astral/python-build-standalone/releases/{{
+      hermes_agent.python.release }}/cpython-{{ hermes_agent.python.version }}+{{
+      hermes_agent.python.release }}-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz
+    dest: "{{ hermes_cache }}/python.tar.gz"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Extract Hermes Python runtime
+  ansible.builtin.unarchive:
+    src: "{{ hermes_cache }}/python.tar.gz"
+    dest: "{{ hermes_python_root }}"
+    remote_src: true
+    creates: "{{ hermes_python_root }}/python/bin/python3.11"
+
+- name: Verify Hermes Python runtime
+  ansible.builtin.command:
+    argv:
+      - "{{ hermes_python_root }}/python/bin/python3.11"
+      - -c
+      - >-
+        import sys;
+        assert sys.version_info[:3] == (3, 11, 16), sys.version
+  changed_when: false
+
+#
+# uv 0.12.7
+#
+
+- name: Download uv from AI Stores
+  ansible.builtin.get_url:
+    url: >-
+      {{ ai_stores.base_url }}/vault/python/tooling/uv/releases/{{
+      hermes_agent.uv.version }}/uv-x86_64-unknown-linux-gnu.tar.gz
+    dest: "{{ hermes_cache }}/uv.tar.gz"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Extract uv
+  ansible.builtin.unarchive:
+    src: "{{ hermes_cache }}/uv.tar.gz"
+    dest: "{{ hermes_uv_root }}"
+    remote_src: true
+    creates: "{{ hermes_uv_root }}/uv-x86_64-unknown-linux-gnu/uv"
+
+- name: Verify uv version
+  ansible.builtin.command:
+    argv:
+      - "{{ hermes_uv_root }}/uv-x86_64-unknown-linux-gnu/uv"
+      - --version
+  register: hermes_uv_version
+  changed_when: false
+
+- name: Require configured uv version
+  ansible.builtin.assert:
+    that:
+      - "hermes_agent.uv.version in hermes_uv_version.stdout"
+
+#
+# Python environment from the locked Hermes source.
+#
+
+- name: Install Hermes Python environment from Graystone AI Stores
+  ansible.builtin.command:
+    argv:
+      - "{{ hermes_uv_root }}/uv-x86_64-unknown-linux-gnu/uv"
+      - sync
+      - --extra
+      - all
+      - --frozen
+      - --python
+      - "{{ hermes_python_root }}/python/bin/python3.11"
+      - --default-index
+      - "{{ ai_stores.pypi_index_url }}"
+      - --no-progress
+  args:
+    chdir: "{{ hermes_source }}"
+  environment:
+    UV_PYTHON_DOWNLOADS: "never"
+    UV_NO_PROGRESS: "1"
+    UV_INDEX_URL: "{{ ai_stores.pypi_index_url }}"
+    UV_EXTRA_INDEX_URL: ""
+    PIP_INDEX_URL: "{{ ai_stores.pypi_index_url }}"
+    PIP_EXTRA_INDEX_URL: ""
+  register: hermes_uv_sync
+  changed_when: >-
+    'Installed ' in hermes_uv_sync.stderr or
+    'Prepared ' in hermes_uv_sync.stderr or
+    'Installed ' in hermes_uv_sync.stdout
+
+#
+# Node 26.8.1
+#
+
+- name: Download Hermes Node runtime from AI Stores
+  ansible.builtin.get_url:
+    url: >-
+      {{ ai_stores.base_url }}/vault/node/runtimes/nodejs/releases/v{{
+      hermes_agent.node.version }}/node-v{{ hermes_agent.node.version }}-linux-x64.tar.xz
+    dest: "{{ hermes_cache }}/node.tar.xz"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Extract Hermes Node runtime
+  ansible.builtin.unarchive:
+    src: "{{ hermes_cache }}/node.tar.xz"
+    dest: "{{ hermes_node_root }}"
+    remote_src: true
+    extra_opts:
+      - --strip-components=1
+    creates: "{{ hermes_node_root }}/bin/node"
+
+- name: Verify Hermes Node version
+  ansible.builtin.command:
+    argv:
+      - "{{ hermes_node_root }}/bin/node"
+      - --version
+  register: hermes_node_version
+  changed_when: false
+
+- name: Require configured Node version
+  ansible.builtin.assert:
+    that:
+      - "hermes_node_version.stdout == 'v' ~ hermes_agent.node.version"
+
+#
+# Hermes TUI npm dependency closure.
+#
+# The Hermes repository is a monorepo.  Its root package-lock contains
+# dependencies for desktop, web, tests, and development tooling that are not
+# required by the managed Hermes TUI installation.
+#
+# AI Stores therefore curates the dependency closure required by the ui-tui
+# workspace only.  Installation is performed from an isolated npm cache with
+# --offline so no dependency may be obtained from the public npm registry.
+#
+
+- name: Download Hermes npm TUI manifest
+  ansible.builtin.get_url:
+    url: >-
+      {{ ai_stores.base_url }}/vault/node/npm/manifests/hermes-agent/{{
+      hermes_agent.version }}/linux-x86_64-node26-tui.tsv
+    dest: "{{ hermes_cache }}/npm-tui.tsv"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create Hermes npm package acquisition helper
+  ansible.builtin.copy:
+    dest: "{{ hermes_cache }}/acquire-npm.py"
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/usr/bin/env python3
+
+      import csv
+      import hashlib
+      import pathlib
+      import sys
+      import urllib.request
+
+      base = sys.argv[1].rstrip("/")
+      dest = pathlib.Path(sys.argv[2])
+      manifest = pathlib.Path(sys.argv[3])
+
+      dest.mkdir(parents=True, exist_ok=True)
+
+      with manifest.open(newline="") as fh:
+          rows = csv.DictReader(fh, delimiter="\t")
+
+          for row in rows:
+              name = row["package"]
+              version = row["version"]
+              filename = row.get("filename")
+
+              if not filename:
+                  filename = row["resolved"].rsplit("/", 1)[-1]
+
+              wanted = row.get("sha256", "")
+              target = dest / filename
+
+              url = (
+                  f"{base}/vault/node/npm/packages/"
+                  f"{name}/{version}/{filename}"
+              )
+
+              if target.exists() and wanted:
+                  have = hashlib.sha256(target.read_bytes()).hexdigest()
+
+                  if have == wanted:
+                      print(f"PRESENT: {name}@{version}")
+                      continue
+
+                  target.unlink()
+
+              elif target.exists():
+                  print(f"PRESENT: {name}@{version}")
+                  continue
+
+              print(f"DOWNLOAD: {name}@{version}")
+
+              tmp = target.with_suffix(target.suffix + ".tmp")
+              urllib.request.urlretrieve(url, tmp)
+
+              if wanted:
+                  have = hashlib.sha256(tmp.read_bytes()).hexdigest()
+
+                  if have != wanted:
+                      tmp.unlink(missing_ok=True)
+                      raise SystemExit(
+                          f"SHA256 mismatch for {name}@{version}: "
+                          f"expected {wanted}, got {have}"
+                      )
+
+              tmp.replace(target)
+
+- name: Acquire curated Hermes TUI npm packages
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ hermes_cache }}/acquire-npm.py"
+      - "{{ ai_stores.base_url }}"
+      - "{{ hermes_npm_tarballs }}"
+      - "{{ hermes_cache }}/npm-tui.tsv"
+  register: hermes_npm_acquire
+  changed_when: "'DOWNLOAD:' in hermes_npm_acquire.stdout"
+
+- name: Define Hermes isolated npm cache
+  ansible.builtin.set_fact:
+    hermes_npm_cache: "{{ hermes_cache }}/npm-cache"
+
+- name: Create Hermes isolated npm cache
+  ansible.builtin.file:
+    path: "{{ hermes_npm_cache }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create Hermes npm cache seeding helper
+  ansible.builtin.copy:
+    dest: "{{ hermes_cache }}/seed-npm-cache.py"
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/usr/bin/env python3
+
+      import csv
+      import pathlib
+      import subprocess
+      import sys
+
+      npm = sys.argv[1]
+      cache = pathlib.Path(sys.argv[2])
+      tarballs = pathlib.Path(sys.argv[3])
+      manifest = pathlib.Path(sys.argv[4])
+
+      cache.mkdir(parents=True, exist_ok=True)
+
+      count = 0
+
+      with manifest.open(newline="") as fh:
+          rows = csv.DictReader(fh, delimiter="\t")
+
+          for row in rows:
+              filename = row.get("filename")
+
+              if not filename:
+                  filename = row["resolved"].rsplit("/", 1)[-1]
+
+              package = row["package"]
+              version = row["version"]
+              tgz = tarballs / filename
+
+              if not tgz.is_file():
+                  raise SystemExit(
+                      f"Missing curated npm tarball: {tgz}"
+                  )
+
+              print(f"CACHE: {package}@{version}")
+
+              subprocess.run(
+                  [
+                      npm,
+                      "cache",
+                      "add",
+                      "--cache",
+                      str(cache),
+                      str(tgz),
+                  ],
+                  check=True,
+              )
+
+              count += 1
+
+      print(f"CACHED: {count} Hermes TUI npm packages")
+
+- name: Check Hermes TUI npm dependency tree
+  ansible.builtin.command:
+    argv:
+      - "{{ hermes_node_root }}/bin/npm"
+      - ls
+      - --workspace
+      - ui-tui
+      - --include-workspace-root=false
+  args:
+    chdir: "{{ hermes_source }}"
+  environment:
+    PATH: "{{ hermes_node_root }}/bin:/usr/bin:/bin"
+    npm_config_update_notifier: "false"
+  register: hermes_npm_tree_check
+  changed_when: false
+  failed_when: false
+
+- name: Seed Hermes isolated npm cache
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ hermes_cache }}/seed-npm-cache.py"
+      - "{{ hermes_node_root }}/bin/npm"
+      - "{{ hermes_npm_cache }}"
+      - "{{ hermes_npm_tarballs }}"
+      - "{{ hermes_cache }}/npm-tui.tsv"
+  environment:
+    PATH: "{{ hermes_node_root }}/bin:/usr/bin:/bin"
+    npm_config_update_notifier: "false"
+  register: hermes_npm_cache_seed
+  changed_when: "'CACHED:' in hermes_npm_cache_seed.stdout"
+  when: hermes_npm_tree_check.rc != 0
+
+- name: Record Hermes TUI npm installation start
+  ansible.builtin.set_fact:
+    hermes_npm_install_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    hermes_npm_install_start_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report Hermes TUI npm installation start
+  ansible.builtin.debug:
+    msg: >-
+      AI_FORGE_INSTALL_START
+      name=hermes-agent-{{ hermes_agent.version }}-tui-npm
+      time={{ hermes_npm_install_start_time }}
+
+- name: Install Hermes TUI npm dependency tree offline
+  ansible.builtin.command:
+    argv:
+      - "{{ hermes_node_root }}/bin/npm"
+      - ci
+      - --workspace
+      - ui-tui
+      - --include-workspace-root=false
+      - --ignore-scripts
+      - --offline
+      - --cache
+      - "{{ hermes_npm_cache }}"
+      - --no-audit
+      - --no-fund
+  args:
+    chdir: "{{ hermes_source }}"
+  environment:
+    PATH: "{{ hermes_node_root }}/bin:/usr/bin:/bin"
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+    npm_config_update_notifier: "false"
+  register: hermes_npm_ci
+  changed_when: "'added ' in hermes_npm_ci.stdout"
+  when: hermes_npm_tree_check.rc != 0
+
+- name: Record Hermes TUI npm installation completion
+  ansible.builtin.set_fact:
+    hermes_npm_install_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    hermes_npm_install_end_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report Hermes TUI npm installation completion
+  ansible.builtin.debug:
+    msg:
+      - >-
+        AI_FORGE_INSTALL_COMPLETE
+        name=hermes-agent-{{ hermes_agent.version }}-tui-npm
+        time={{ hermes_npm_install_end_time }}
+      - >-
+        Elapsed: {{
+          (hermes_npm_install_end_epoch | int) -
+          (hermes_npm_install_start_epoch | int)
+        }} seconds
+
+- name: Verify Hermes TUI workspace installation
+  ansible.builtin.command:
+    argv:
+      - "{{ hermes_node_root }}/bin/npm"
+      - ls
+      - --workspace
+      - ui-tui
+      - --include-workspace-root=false
+      - --depth=0
+  args:
+    chdir: "{{ hermes_source }}"
+  environment:
+    PATH: "{{ hermes_node_root }}/bin:/usr/bin:/bin"
+  register: hermes_tui_npm_tree
+  changed_when: false
+
+#
+# Playwright browser runtime
+#
+
+- name: Build bundled Hermes TUI offline
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+
+      "{{ hermes_node_root }}/bin/npm" run build --workspace ui-tui
+
+      install -d -m 0755         "{{ hermes_source }}/hermes_cli/tui_dist"
+
+      install -m 0644         "{{ hermes_source }}/ui-tui/dist/entry.js"         "{{ hermes_source }}/hermes_cli/tui_dist/entry.js"
+  args:
+    chdir: "{{ hermes_source }}"
+    creates: "{{ hermes_source }}/hermes_cli/tui_dist/entry.js"
+  environment:
+    PATH: "{{ hermes_node_root }}/bin:/usr/bin:/bin"
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+    npm_config_update_notifier: "false"
+
+- name: Download Playwright Chromium archive
+  ansible.builtin.get_url:
+    url: >-
+      {{ ai_stores.base_url }}/vault/playwright/{{ hermes_agent.playwright.version
+      }}/linux-x86_64/archives/chromium-{{ hermes_agent.playwright.chromium_revision }}.zip
+    dest: "{{ hermes_cache }}/chromium.zip"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Download Playwright Chromium headless shell archive
+  ansible.builtin.get_url:
+    url: >-
+      {{ ai_stores.base_url }}/vault/playwright/{{ hermes_agent.playwright.version
+      }}/linux-x86_64/archives/chromium_headless_shell-{{
+      hermes_agent.playwright.chromium_revision }}.zip
+    dest: "{{ hermes_cache }}/chromium-headless-shell.zip"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Download Playwright ffmpeg archive
+  ansible.builtin.get_url:
+    url: >-
+      {{ ai_stores.base_url }}/vault/playwright/{{ hermes_agent.playwright.version
+      }}/linux-x86_64/archives/ffmpeg-{{ hermes_agent.playwright.ffmpeg_revision }}.zip
+    dest: "{{ hermes_cache }}/ffmpeg.zip"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Create Playwright extraction helper
+  ansible.builtin.copy:
+    dest: "{{ hermes_cache }}/extract-playwright.py"
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/usr/bin/env python3
+      from pathlib import Path
+      import sys
+      import zipfile
+
+      archive = Path(sys.argv[1])
+      target = Path(sys.argv[2])
+      marker = target / "INSTALLATION_COMPLETE"
+
+      target.mkdir(parents=True, exist_ok=True)
+
+      extracted = False
+      normalized = False
+
+      with zipfile.ZipFile(archive) as zf:
+          if not marker.exists():
+              zf.extractall(target)
+              extracted = True
+
+          # Python zipfile does not restore Unix permission bits on extract.
+          # Reapply the mode encoded in each archive member so Chromium,
+          # crashpad helpers, ffmpeg, and other executables remain executable.
+          for member in zf.infolist():
+              if member.is_dir():
+                  continue
+
+              mode = (member.external_attr >> 16) & 0o7777
+              if not mode:
+                  continue
+
+              path = target / member.filename
+              if not path.exists():
+                  continue
+
+              current = path.stat().st_mode & 0o7777
+              if current != mode:
+                  path.chmod(mode)
+                  normalized = True
+
+      if extracted:
+          (target / "INSTALLATION_COMPLETE").touch()
+          (target / "DEPENDENCIES_VALIDATED").touch()
+          print(f"EXTRACTED: {target}")
+      elif normalized:
+          print(f"NORMALIZED: {target}")
+      else:
+          print(f"PRESENT: {target}")
+
+- name: Extract Playwright Chromium
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ hermes_cache }}/extract-playwright.py"
+      - "{{ hermes_cache }}/chromium.zip"
+      - "{{ hermes_playwright_root }}/chromium-{{ hermes_agent.playwright.chromium_revision }}"
+  register: hermes_pw_chromium
+  changed_when: >-
+    'EXTRACTED:' in hermes_pw_chromium.stdout or
+    'NORMALIZED:' in hermes_pw_chromium.stdout
+
+- name: Extract Playwright Chromium headless shell
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ hermes_cache }}/extract-playwright.py"
+      - "{{ hermes_cache }}/chromium-headless-shell.zip"
+      - "{{ hermes_playwright_root }}/chromium_headless_shell-{{ hermes_agent.playwright.chromium_revision }}"
+  register: hermes_pw_headless
+  changed_when: >-
+    'EXTRACTED:' in hermes_pw_headless.stdout or
+    'NORMALIZED:' in hermes_pw_headless.stdout
+
+- name: Extract Playwright ffmpeg
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ hermes_cache }}/extract-playwright.py"
+      - "{{ hermes_cache }}/ffmpeg.zip"
+      - "{{ hermes_playwright_root }}/ffmpeg-{{ hermes_agent.playwright.ffmpeg_revision }}"
+  register: hermes_pw_ffmpeg
+  changed_when: >-
+    'EXTRACTED:' in hermes_pw_ffmpeg.stdout or
+    'NORMALIZED:' in hermes_pw_ffmpeg.stdout
+
+#
+# Runtime dependencies. All resolution is constrained to the local AI Stores
+# Noble repository.
+#
+
+- name: Install Playwright runtime package closure
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -euo pipefail
+
+      deps=()
+
+      for f in \
+        "{{ hermes_playwright_root }}/chromium-{{ hermes_agent.playwright.chromium_revision }}/chrome-linux64/deb.deps" \
+        "{{ hermes_playwright_root }}/chromium_headless_shell-{{ hermes_agent.playwright.chromium_revision }}/chrome-headless-shell-linux64/deb.deps"
+      do
+          if [[ -f "$f" ]]; then
+              while IFS= read -r dep; do
+                  [[ -n "$dep" ]] || continue
+                  deps+=("$dep")
+              done < "$f"
+          fi
+      done
+
+      deps+=(
+        xvfb
+        fonts-liberation
+        fonts-noto-color-emoji
+        fonts-unifont
+        fonts-wqy-zenhei
+      )
+
+      mapfile -t deps < <(printf '%s\n' "${deps[@]}" | sort -u)
+
+      apt-get \
+        -y \
+        -o "Dir::Etc::sourcelist={{ hermes_apt_source }}" \
+        -o "Dir::Etc::sourceparts=-" \
+        satisfy "${deps[@]}"
+  register: hermes_playwright_apt
+  changed_when: >-
+    (hermes_playwright_apt.stdout | regex_search('[1-9][0-9]* newly installed')) or
+    (hermes_playwright_apt.stdout | regex_search('[1-9][0-9]* upgraded'))
+
+#
+# Launch environment and PATH
+#
+
+- name: Install Hermes environment file
+  ansible.builtin.copy:
+    dest: "{{ hermes_root }}/environment"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      HOME=/home/{{ agent_identity.user }}
+      HERMES_HOME=/home/{{ agent_identity.user }}/.hermes
+      PLAYWRIGHT_BROWSERS_PATH={{ hermes_playwright_root }}
+      PATH={{ hermes_source }}/.venv/bin:{{ hermes_node_root }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+- name: Install Hermes command launchers
+  ansible.builtin.copy:
+    dest: "/usr/local/bin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      export HOME="/home/{{ agent_identity.user }}"
+      export HERMES_HOME="/home/{{ agent_identity.user }}/.hermes"
+      export PLAYWRIGHT_BROWSERS_PATH="{{ hermes_playwright_root }}"
+      export PATH="{{ hermes_source }}/.venv/bin:{{ hermes_node_root }}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+      exec "{{ hermes_source }}/.venv/bin/{{ item }}" "$@"
+  loop:
+    - hermes
+    - hermes-agent
+    - hermes-acp
+
+- name: Create Hermes state directory
+  ansible.builtin.file:
+    path: "/home/{{ agent_identity.user }}/.hermes"
+    state: directory
+    owner: "{{ agent_identity.user }}"
+    group: "{{ agent_identity.user }}"
+    mode: "0700"
+
+- name: Ensure Hermes state belongs to agent user
+  ansible.builtin.file:
+    path: "/home/{{ agent_identity.user }}/.hermes"
+    state: directory
+    owner: "{{ agent_identity.user }}"
+    group: "{{ agent_identity.user }}"
+    recurse: true
+
+- name: Install Hermes Muse Glimmer model configuration
+  ansible.builtin.copy:
+    dest: "/home/{{ agent_identity.user }}/.hermes/config.yaml"
+    owner: "{{ agent_identity.user }}"
+    group: "{{ agent_identity.user }}"
+    mode: "0600"
+    content: |
+      model:
+        provider: "{{ hermes_agent.model.provider }}"
+        default: "{{ hermes_agent.model.default }}"
+        base_url: "{{ hermes_agent.model.base_url }}"
+        api_mode: "{{ hermes_agent.model.api_mode }}"
+
+- name: Install Hermes local inference credentials
+  ansible.builtin.copy:
+    dest: "/home/{{ agent_identity.user }}/.hermes/.env"
+    owner: "{{ agent_identity.user }}"
+    group: "{{ agent_identity.user }}"
+    mode: "0600"
+    content: |
+      OPENAI_API_KEY={{ hermes_agent.model.api_key }}
+
+#
+# Verification
+#
+
+- name: Verify Hermes Python console entry points exist
+  ansible.builtin.stat:
+    path: "{{ hermes_source }}/.venv/bin/{{ item }}"
+  loop:
+    - hermes
+    - hermes-agent
+    - hermes-acp
+  register: hermes_console_entry_points
+
+- name: Require Hermes Python console entry points
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.executable
+    fail_msg: >-
+      Hermes console entry point was not created:
+      {{ item.item }}
+  loop: "{{ hermes_console_entry_points.results }}"
+
+- name: Verify Hermes command
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/runuser
+      - -u
+      - "{{ agent_identity.user }}"
+      - --
+      - /usr/local/bin/hermes
+      - --version
+  register: hermes_version_result
+  changed_when: false
+
+- name: Require configured Hermes version
+  ansible.builtin.assert:
+    that:
+      - "hermes_agent.version in hermes_version_result.stdout"
+    fail_msg: >-
+      Unexpected Hermes version output.
+      Expected {{ hermes_agent.version }};
+      received {{ hermes_version_result.stdout | trim }}.
+
+- name: Verify Hermes Agent entry point
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/runuser
+      - -u
+      - "{{ agent_identity.user }}"
+      - --
+      - /usr/local/bin/hermes-agent
+      - --help
+  register: hermes_agent_help
+  changed_when: false
+
+- name: Verify Hermes ACP entry point
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/runuser
+      - -u
+      - "{{ agent_identity.user }}"
+      - --
+      - /usr/local/bin/hermes-acp
+      - --help
+  register: hermes_acp_help
+  changed_when: false
+
+- name: Verify Playwright Chromium executable
+  ansible.builtin.stat:
+    path: >-
+      {{ hermes_playwright_root }}/chromium-{{
+      hermes_agent.playwright.chromium_revision }}/chrome-linux64/chrome
+  register: hermes_chromium_binary
+
+- name: Require Playwright Chromium executable
+  ansible.builtin.assert:
+    that:
+      - hermes_chromium_binary.stat.exists
+      - hermes_chromium_binary.stat.executable
+    fail_msg: "Curated Playwright Chromium runtime was not installed"
+
+- name: Report installed Hermes state
+  ansible.builtin.debug:
+    msg:
+      - "Hermes: {{ hermes_version_result.stdout | trim }}"
+      - "Python: {{ hermes_python_root }}/python/bin/python3.11"
+      - "Node: {{ hermes_node_root }}/bin/node"
+      - "Playwright: {{ hermes_playwright_root }}"
+
+- name: Record Hermes installation completion
+  ansible.builtin.set_fact:
+    hermes_install_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    hermes_install_end_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report Hermes installation completion
+  ansible.builtin.debug:
+    msg:
+      - >-
+        AI_FORGE_INSTALL_COMPLETE name=hermes-agent-{{ hermes_agent.version }}
+        time={{ hermes_install_end_time }}
+      - >-
+        Elapsed: {{
+          (hermes_install_end_epoch | int) -
+          (hermes_install_start_epoch | int)
+        }} seconds

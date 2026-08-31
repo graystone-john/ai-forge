@@ -3,7 +3,7 @@ inference:
   service_name: ai-forge-inference
   host: 127.0.0.1
   port: 8080
-  context_size: 32768
+  context_size: 65536
   operational_user: daedalus
   operational_home: /home/daedalus
 

@@ -4,3 +4,34 @@ coding_agent:
   python_version: "3.12"
 
   apt_repository: "http://10.10.10.1:81/ai-stores/vault/linux/ubuntu/apt"
+
+hermes_agent:
+  version: "0.20.6"
+  commit: "60a4442826ee063bf39aa26ebac2af0f347cfce0"
+
+  python:
+    version: "3.11.16"
+    release: "20260825"
+
+  uv:
+    version: "0.12.7"
+
+  node:
+    version: "26.8.1"
+
+  npm:
+    version: "11.19.0"
+
+  model:
+    provider: "custom"
+    default: "muse-glimmer-30b"
+    base_url: "http://127.0.0.1:8080/v1"
+    api_mode: "chat_completions"
+    api_key: "local-ai-forge"
+
+  playwright:
+    version: "1.62.1"
+    chromium_revision: "1234"
+    chromium_version: "151.0.7922.34"
+    ffmpeg_revision: "1011"
+

@@ -19,6 +19,11 @@ ExecStart=/usr/local/bin/llama serve \
   --offline \
   --alias {{ model.id }} \
   --ctx-size {{ inference.context_size }} \
+{% if inference.dflash_enabled | default(false) %}
+  --spec-draft-model {{ inference.dflash_model }} \
+  --spec-type draft-dflash \
+  --spec-draft-n-max {{ inference.dflash_n_max | default(15) }} \
+{% endif %}
   --gpu-layers all \
   --parallel 1 \
   --host {{ inference.host }} \
