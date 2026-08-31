@@ -6,6 +6,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE_CONFIG="${ROOT}/configs/dnsmasq/provisioning.conf"
 MACHINE_CONFIG="${ROOT}/generated/dnsmasq/machines.conf"
 
+AI_STORES="${ROOT}/../ai-stores"
+IPXE_VERSION="1.21.1+git-20220113.fbbdc3926-0ubuntu2"
+IPXE_DEB="${AI_STORES}/vault/linux/ubuntu/apt/pool/main/ipxe_${IPXE_VERSION}_all.deb"
+IPXE_DEB_SHA256="30ff9a37be08193f018436a5611e357b2e065ae251155b7f95a1d4bdd4d2ad39"
+IPXE_EFI_SHA256="079471ff9733ebe350839b9ee97d208309d06cbeeb3d309f141a68c433ab300c"
+TFTP_ROOT="/srv/pxe/tftp"
+
 if [ ! -f "$BASE_CONFIG" ]; then
     echo "Missing: $BASE_CONFIG"
     exit 1
@@ -16,6 +23,48 @@ if [ ! -f "$MACHINE_CONFIG" ]; then
     echo "Run: ./scripts/generate-dnsmasq.py"
     exit 1
 fi
+
+if [ ! -f "$IPXE_DEB" ]; then
+    echo "Missing curated iPXE package:"
+    echo "  $IPXE_DEB"
+    echo "Acquire it first with:"
+    echo "  cd ${AI_STORES}/ansible && ansible-playbook playbooks/ipxe.yaml"
+    exit 1
+fi
+
+actual_ipxe_deb_sha="$(sha256sum "$IPXE_DEB" | awk '{print $1}')"
+
+if [ "$actual_ipxe_deb_sha" != "$IPXE_DEB_SHA256" ]; then
+    echo "Curated iPXE package checksum mismatch."
+    echo "Expected: $IPXE_DEB_SHA256"
+    echo "Actual:   $actual_ipxe_deb_sha"
+    exit 1
+fi
+
+ipxe_work="$(mktemp -d)"
+trap 'rm -rf "$ipxe_work"' EXIT
+
+dpkg-deb -x "$IPXE_DEB" "$ipxe_work"
+
+IPXE_EFI="${ipxe_work}/usr/lib/ipxe/ipxe.efi"
+
+if [ ! -f "$IPXE_EFI" ]; then
+    echo "Curated iPXE package does not contain /usr/lib/ipxe/ipxe.efi"
+    exit 1
+fi
+
+actual_ipxe_efi_sha="$(sha256sum "$IPXE_EFI" | awk '{print $1}')"
+
+if [ "$actual_ipxe_efi_sha" != "$IPXE_EFI_SHA256" ]; then
+    echo "Extracted iPXE EFI checksum mismatch."
+    echo "Expected: $IPXE_EFI_SHA256"
+    echo "Actual:   $actual_ipxe_efi_sha"
+    exit 1
+fi
+
+sudo install -d -m 0755 "$TFTP_ROOT"
+
+sudo install -m 0644     "$IPXE_EFI"     "${TFTP_ROOT}/ipxe.efi"
 
 sudo install -m 0644 \
     "$BASE_CONFIG" \
