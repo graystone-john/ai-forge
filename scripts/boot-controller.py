@@ -8,11 +8,11 @@ import yaml
 
 
 ROOT = Path.home() / "graystone" / "ai-forge"
-DATA_ROOT = Path.home() / "graystone" / "provisioning-data"
+RUNTIME_ROOT = ROOT / "runtime"
 
 MACHINES_ROOT = ROOT / "machines"
-HTTP_ROOT = DATA_ROOT / "http"
-STATE_ROOT = DATA_ROOT / "state"
+HTTP_ROOT = RUNTIME_ROOT / "http"
+STATE_ROOT = RUNTIME_ROOT / "state"
 
 HOST = "127.0.0.1"
 PORT = 8081

@@ -1,8 +1,9 @@
 #!ipxe
 
 set server {{ provisioning_server }}
-set base http://${server}/pxe/ubuntu/{{ ubuntu_version }}
+set boot_base {{ ubuntu_boot_base_url }}
 set iso {{ ubuntu_iso }}
+set iso_url {{ ubuntu_iso_url }}
 
 echo ==================================================
 echo Graystone AI Forge
@@ -18,10 +19,10 @@ echo Loading Ubuntu kernel...
 
 set semi:hex 3b
 
-kernel ${base}/vmlinuz initrd=initrd ip=dhcp url=${base}/${iso} autoinstall ds=nocloud-net${semi:string}s=http://${server}/pxe/{{ machine_name }}/ nomodeset
+kernel ${boot_base}/vmlinuz initrd=initrd ip=dhcp url=${iso_url} autoinstall ds=nocloud-net${semi:string}s=http://${server}/pxe/{{ machine_name }}/ nomodeset
 
 echo Loading Ubuntu initrd...
-initrd --name initrd ${base}/initrd
+initrd --name initrd ${boot_base}/initrd
 
 echo Starting Ubuntu Autoinstall...
 boot

@@ -1,0 +1,9 @@
+---
+- name: Require AI Forge stage
+  ansible.builtin.assert:
+    that:
+      - ai_forge_stage is defined
+    fail_msg: "ai_forge_stage must be specified"
+
+- name: Run AI Forge stage
+  ansible.builtin.include_tasks: "{{ ai_forge_stage }}.yaml"

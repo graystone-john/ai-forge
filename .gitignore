@@ -31,3 +31,10 @@ __pycache__/
 
 # Local Python virtual environments
 .venv/
+
+# Local AI Forge operational runtime state
+/runtime/http/
+
+# Local AI Forge machine state
+/runtime/state/*
+!/runtime/state/.gitkeep

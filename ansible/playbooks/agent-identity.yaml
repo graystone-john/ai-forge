@@ -10,7 +10,9 @@
         msg: "AI_FORGE_STEP_START name=agent-identity machine={{ inventory_hostname }}"
 
   roles:
-    - agent-identity
+    - role: ai-forge
+      vars:
+        ai_forge_stage: agent-identity
 
   post_tasks:
     - name: Report AI Forge step complete

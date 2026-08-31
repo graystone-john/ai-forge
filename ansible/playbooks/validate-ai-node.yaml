@@ -13,7 +13,9 @@
         msg: "AI_FORGE_STEP_START name=validate-ai-node machine={{ inventory_hostname }}"
 
   roles:
-    - validate-coding-node
+    - role: ai-forge
+      vars:
+        ai_forge_stage: validate-ai-node
 
   post_tasks:
     - name: Report AI Forge stage complete

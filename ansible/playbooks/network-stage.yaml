@@ -8,4 +8,6 @@
     - ../../secrets/local.yaml
 
   roles:
-    - network
+    - role: ai-forge
+      vars:
+        ai_forge_stage: network

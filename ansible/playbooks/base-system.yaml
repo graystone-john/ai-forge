@@ -13,11 +13,9 @@
         msg: "AI_FORGE_STEP_START name=base-system machine={{ inventory_hostname }}"
 
   roles:
-    - daedalus-base
-    - kernel-policy
-    - network
-    - utilities
-    - nvidia-offline
+    - role: ai-forge
+      vars:
+        ai_forge_stage: base-system
 
   post_tasks:
     - name: Report AI Forge stage complete

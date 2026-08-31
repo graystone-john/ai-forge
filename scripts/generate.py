@@ -9,7 +9,8 @@ import yaml
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA_ROOT = Path.home() / "graystone" / "provisioning-data"
+RUNTIME_ROOT = ROOT / "runtime"
+HTTP_ROOT = RUNTIME_ROOT / "http"
 
 
 def load_yaml(path):
@@ -23,7 +24,7 @@ def main():
     parser.add_argument(
         "--deploy",
         action="store_true",
-        help="Deploy generated files into the live provisioning-data tree",
+        help="Deploy generated files into the live AI Forge runtime tree",
     )
     args = parser.parse_args()
 
@@ -92,6 +93,8 @@ def main():
         "provisioning_server": forge["provisioning"]["server_ip"],
         "ubuntu_version": ubuntu_version,
         "ubuntu_iso": forge["images"]["ubuntu"][ubuntu_version]["iso"],
+        "ubuntu_boot_base_url": forge["images"]["ubuntu"][ubuntu_version]["boot_base_url"],
+        "ubuntu_iso_url": forge["images"]["ubuntu"][ubuntu_version]["iso_url"],
         "username": forge["defaults"]["username"],
         "password_hash": secrets["password_hash"],
         "os_disk_serial": machine["hardware"]["os_disk"]["udev_serial"],
@@ -141,13 +144,13 @@ def main():
     print(f"Generated {vendor_data_file}")
 
     if args.deploy:
-        machine_http = DATA_ROOT / "http" / machine_name
+        machine_http = HTTP_ROOT / machine_name
         machine_http.mkdir(parents=True, exist_ok=True)
 
         # Global entry point currently requested by iPXE.
         shutil.copy2(
             generated["boot.ipxe"],
-            DATA_ROOT / "http" / "boot.ipxe",
+            HTTP_ROOT / "boot.ipxe",
         )
 
         # Machine-specific boot modes.
@@ -179,7 +182,7 @@ def main():
 
         print()
         print("Deployed:")
-        print(f"  {DATA_ROOT / 'http' / 'boot.ipxe'}")
+        print(f"  {HTTP_ROOT / 'boot.ipxe'}")
         print(f"  {machine_http / 'normal.ipxe'}")
         print(f"  {machine_http / 'provision.ipxe'}")
         print(f"  {machine_http / 'user-data'}")

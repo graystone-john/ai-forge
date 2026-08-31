@@ -5,13 +5,18 @@ Wants=network.target
 
 [Service]
 Type=simple
-User=nispoe
-Group=nispoe
+
+User={{ inference.operational_user }}
+Group={{ inference.operational_user }}
+
+Environment=HOME={{ inference.operational_home }}
+Environment=LLAMA_CACHE={{ inference.operational_home }}/.cache/huggingface/hub
 
 ExecStartPre=/bin/bash -c 'for i in {1..60}; do /usr/bin/nvidia-smi >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1'
 
-ExecStart=/opt/ai-forge/bin/llama serve \
-  --model /opt/ai-forge/models/{{ model.directory }}/{{ model.model_file }} \
+ExecStart=/usr/local/bin/llama serve \
+  -hf {{ model.hf_repo }}:{{ model.hf_quant }} \
+  --offline \
   --alias {{ model.id }} \
   --ctx-size {{ inference.context_size }} \
   --gpu-layers all \
@@ -21,7 +26,6 @@ ExecStart=/opt/ai-forge/bin/llama serve \
 
 Restart=on-failure
 RestartSec=5
-
 TimeoutStopSec=30
 
 [Install]

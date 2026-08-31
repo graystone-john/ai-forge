@@ -13,8 +13,9 @@
         msg: "AI_FORGE_STEP_START name=inference machine={{ inventory_hostname }}"
 
   roles:
-    - model
-    - llama-runtime
+    - role: ai-forge
+      vars:
+        ai_forge_stage: inference
 
   post_tasks:
     - name: Report AI Forge stage complete

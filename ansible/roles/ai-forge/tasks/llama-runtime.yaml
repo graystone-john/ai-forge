@@ -1,0 +1,366 @@
+---
+- name: Define llama installation paths
+  ansible.builtin.set_fact:
+    llama_stage_root: "/var/tmp/ai-forge-llama-{{ llama_runtime.version }}"
+    llama_stage_home: "/var/tmp/ai-forge-llama-{{ llama_runtime.version }}/home"
+    llama_installer_dst: "/var/tmp/ai-forge-llama-{{ llama_runtime.version }}/install-offline.sh"
+    llama_staged_binary: "/var/tmp/ai-forge-llama-{{ llama_runtime.version }}/home/.local/bin/llama"
+    llama_system_binary: "/usr/local/bin/llama"
+    llama_prefetch_port: 18090
+    llama_prefetch_pid: "/run/ai-forge-llama-prefetch.pid"
+    llama_prefetch_log: "/var/tmp/ai-forge-llama-prefetch.log"
+    inference_service_unit: "{{ inference.service_name }}.service"
+
+- name: Create temporary llama installer staging home
+  ansible.builtin.file:
+    path: "{{ llama_stage_home }}"
+    state: directory
+    owner: ai-forge
+    group: ai-forge
+    mode: "0755"
+
+- name: Copy preserved offline llama installer from AI Stores
+  ansible.builtin.copy:
+    src: "{{ llama_runtime.installer }}"
+    dest: "{{ llama_installer_dst }}"
+    owner: ai-forge
+    group: ai-forge
+    mode: "0755"
+
+- name: Verify offline llama installer checksum
+  ansible.builtin.command:
+    cmd: sha256sum "{{ llama_installer_dst }}"
+  register: llama_installer_checksum
+  changed_when: false
+
+- name: Require expected offline llama installer checksum
+  ansible.builtin.assert:
+    that:
+      - llama_runtime.installer_checksum in llama_installer_checksum.stdout
+    fail_msg: "Offline llama installer checksum mismatch"
+
+- name: Record llama installation start
+  ansible.builtin.set_fact:
+    llama_install_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    llama_install_start_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report llama installation start
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: llama {{ llama_runtime.version }} system installation
+      from AI Stores started at {{ llama_install_start_time }}.
+
+- name: Run official llama installer against AI Stores
+  ansible.builtin.command:
+    cmd: "/bin/sh {{ llama_installer_dst }}"
+  become: true
+  become_user: ai-forge
+  environment:
+    HOME: "{{ llama_stage_home }}"
+    LLAMA_VERSION: "{{ llama_runtime.version }}"
+    LLAMA_REPO: "{{ llama_runtime.repository }}"
+  register: llama_install
+  changed_when: true
+
+- name: Verify staged llama checksum
+  ansible.builtin.command:
+    cmd: sha256sum "{{ llama_staged_binary }}"
+  register: llama_staged_checksum
+  changed_when: false
+
+- name: Require expected staged llama checksum
+  ansible.builtin.assert:
+    that:
+      - llama_runtime.checksum in llama_staged_checksum.stdout
+    fail_msg: "Staged llama runtime checksum mismatch"
+
+- name: Verify staged llama version
+  ansible.builtin.command:
+    cmd: "{{ llama_staged_binary }} version"
+  register: llama_staged_version
+  changed_when: false
+
+- name: Require expected llama build
+  ansible.builtin.assert:
+    that:
+      - "'build 10612' in ((llama_staged_version.stdout | default('')) ~ (llama_staged_version.stderr | default('')))"
+      - "'commit 758443071' in ((llama_staged_version.stdout | default('')) ~ (llama_staged_version.stderr | default('')))"
+    fail_msg: >-
+      Unexpected llama runtime version:
+      stdout={{ llama_staged_version.stdout | default('') }}
+      stderr={{ llama_staged_version.stderr | default('') }}
+
+- name: Remove previous system llama path before system installation
+  ansible.builtin.file:
+    path: "{{ llama_system_binary }}"
+    state: absent
+
+- name: Install llama system-wide
+  ansible.builtin.copy:
+    remote_src: true
+    src: "{{ llama_staged_binary }}"
+    dest: "{{ llama_system_binary }}"
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Verify system-wide llama checksum
+  ansible.builtin.command:
+    cmd: sha256sum "{{ llama_system_binary }}"
+  register: llama_system_checksum
+  changed_when: false
+
+- name: Require expected system-wide llama checksum
+  ansible.builtin.assert:
+    that:
+      - llama_runtime.checksum in llama_system_checksum.stdout
+    fail_msg: "System-wide llama runtime checksum mismatch"
+
+- name: Remove temporary llama installer staging directory
+  ansible.builtin.file:
+    path: "{{ llama_stage_root }}"
+    state: absent
+
+- name: Check cached Muse model
+  ansible.builtin.stat:
+    path: "{{ llama_model_blob }}"
+    checksum_algorithm: sha256
+  register: cached_muse_model
+
+- name: Check cached Muse projector
+  ansible.builtin.stat:
+    path: "{{ llama_projector_blob }}"
+    checksum_algorithm: sha256
+  register: cached_muse_projector
+
+- name: Determine whether Muse cache population is required
+  ansible.builtin.set_fact:
+    muse_cache_required: >-
+      {{
+        (not cached_muse_model.stat.exists)
+        or (cached_muse_model.stat.checksum | default('') != model.model_checksum)
+        or (not cached_muse_projector.stat.exists)
+        or (cached_muse_projector.stat.checksum | default('') != model.projector_checksum)
+      }}
+
+- name: Record Muse cache population start
+  ansible.builtin.set_fact:
+    muse_cache_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    muse_cache_start_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  when: muse_cache_required
+
+- name: Report Muse cache population start
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: llama is populating the normal Muse Hugging Face cache
+      for {{ inference.operational_user }} from AI Stores at
+      {{ muse_cache_start_time }}.
+  when: muse_cache_required
+
+- name: Stop stale temporary Muse cache population process
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    if [[ -f "{{ llama_prefetch_pid }}" ]]; then
+      pid="$(cat "{{ llama_prefetch_pid }}" 2>/dev/null || true)"
+
+      if [[ -n "${pid}" ]] && kill -0 "${pid}" 2>/dev/null; then
+        kill "${pid}" 2>/dev/null || true
+
+        for i in {1..30}; do
+          if ! kill -0 "${pid}" 2>/dev/null; then
+            break
+          fi
+          sleep 1
+        done
+
+        kill -9 "${pid}" 2>/dev/null || true
+      fi
+
+      rm -f "{{ llama_prefetch_pid }}"
+    fi
+
+    find "{{ llama_cache_root }}" \
+      -type f \
+      -name "*.downloadInProgress" \
+      -delete 2>/dev/null || true
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: muse_cache_required
+
+- name: Start llama temporary Muse cache population
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    sudo -u {{ inference.operational_user }} env \
+      HOME={{ inference.operational_home }} \
+      LLAMA_CACHE={{ llama_cache_root }} \
+      MODEL_ENDPOINT={{ model.endpoint }} \
+      {{ llama_system_binary }} serve \
+        -hf {{ model.hf_repo }}:{{ model.hf_quant }} \
+        --host 127.0.0.1 \
+        --port {{ llama_prefetch_port }} \
+        --ctx-size 512 \
+        --gpu-layers 0 \
+        > "{{ llama_prefetch_log }}" 2>&1 &
+
+    echo $! > "{{ llama_prefetch_pid }}"
+  args:
+    executable: /bin/bash
+  when: muse_cache_required
+
+- name: Wait for llama to finish Muse acquisition and load
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ llama_prefetch_port }}"
+    timeout: 1800
+  when: muse_cache_required
+
+- name: Stop temporary Muse cache population server
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    if [[ -f "{{ llama_prefetch_pid }}" ]]; then
+      pid="$(cat "{{ llama_prefetch_pid }}")"
+      kill "${pid}" 2>/dev/null || true
+
+      for i in {1..30}; do
+        if ! kill -0 "${pid}" 2>/dev/null; then
+          break
+        fi
+        sleep 1
+      done
+
+      kill -9 "${pid}" 2>/dev/null || true
+      rm -f "{{ llama_prefetch_pid }}"
+    fi
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: muse_cache_required
+
+- name: Verify cached Muse model checksum
+  ansible.builtin.command:
+    cmd: sha256sum "{{ llama_model_blob }}"
+  register: cached_muse_model_checksum
+  changed_when: false
+
+- name: Require expected cached Muse model checksum
+  ansible.builtin.assert:
+    that:
+      - model.model_checksum in cached_muse_model_checksum.stdout
+    fail_msg: "Cached Muse model checksum mismatch"
+
+- name: Verify cached Muse projector checksum
+  ansible.builtin.command:
+    cmd: sha256sum "{{ llama_projector_blob }}"
+  register: cached_muse_projector_checksum
+  changed_when: false
+
+- name: Require expected cached Muse projector checksum
+  ansible.builtin.assert:
+    that:
+      - model.projector_checksum in cached_muse_projector_checksum.stdout
+    fail_msg: "Cached Muse projector checksum mismatch"
+
+- name: Record Muse cache population completion
+  ansible.builtin.set_fact:
+    muse_cache_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    muse_cache_end_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  when: muse_cache_required
+
+- name: Report Muse cache population completion
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: Muse Hugging Face cache population completed at
+      {{ muse_cache_end_time }}.
+      Elapsed: {{
+        (muse_cache_end_epoch | int) -
+        (muse_cache_start_epoch | int)
+      }} seconds.
+  when: muse_cache_required
+
+- name: Remove obsolete AI Forge llama runtime
+  ansible.builtin.file:
+    path: /opt/ai-forge/bin/llama
+    state: absent
+
+- name: Remove obsolete AI Forge model directory
+  ansible.builtin.file:
+    path: /opt/ai-forge/models
+    state: absent
+
+- name: Remove obsolete AI Forge llama staging home
+  ansible.builtin.file:
+    path: /opt/ai-forge/llama-home
+    state: absent
+
+- name: Record llama installation completion
+  ansible.builtin.set_fact:
+    llama_install_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    llama_install_end_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Report llama installation completion
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: llama system installation completed at
+      {{ llama_install_end_time }}.
+      Elapsed: {{
+        (llama_install_end_epoch | int) -
+        (llama_install_start_epoch | int)
+      }} seconds.
+
+- name: Install inference systemd service
+  ansible.builtin.template:
+    src: ai-forge-inference.service.j2
+    dest: "/etc/systemd/system/{{ inference_service_unit }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: inference_service_template
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: inference_service_template.changed
+
+- name: Restart inference service after unit change
+  ansible.builtin.systemd:
+    name: "{{ inference_service_unit }}"
+    state: restarted
+  when: inference_service_template.changed
+
+- name: Enable and start inference service
+  ansible.builtin.systemd:
+    name: "{{ inference_service_unit }}"
+    enabled: true
+    state: started
+
+- name: Wait for inference HTTP port
+  ansible.builtin.wait_for:
+    host: "{{ inference.host }}"
+    port: "{{ inference.port }}"
+    timeout: 300
+
+- name: Allow inference model to finish loading
+  ansible.builtin.pause:
+    seconds: 5
+
+- name: Verify selected model is ready
+  ansible.builtin.uri:
+    url: "http://{{ inference.host }}:{{ inference.port }}/v1/models"
+    method: GET
+    return_content: true
+    status_code: 200
+  register: inference_models
+
+- name: Require selected model in inference API
+  ansible.builtin.assert:
+    that:
+      - model.id in (inference_models.content | string)
+    fail_msg: "Selected model {{ model.id }} is not exposed by inference API"
+
+- name: Report inference API
+  ansible.builtin.debug:
+    msg: "{{ inference_models.json | default(inference_models.content) }}"

@@ -8,3 +8,5 @@ images:
   ubuntu:
     "24.04":
       iso: ubuntu-24.04.4-live-server-amd64.iso
+      boot_base_url: http://10.10.10.1:81/ai-stores/vault/linux/ubuntu/releases/24.04.4/amd64/boot
+      iso_url: http://10.10.10.1:81/ai-stores/vault/linux/ubuntu/releases/24.04.4/amd64/ubuntu-24.04.4-live-server-amd64.iso

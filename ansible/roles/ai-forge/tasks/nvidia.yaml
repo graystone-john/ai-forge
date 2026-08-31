@@ -1,0 +1,123 @@
+---
+- name: Require approved kernel before NVIDIA install
+  ansible.builtin.assert:
+    that:
+      - ansible_kernel == daedalus_kernel.version
+    fail_msg: >-
+      NVIDIA installation requires {{ daedalus_kernel.version }};
+      running {{ ansible_kernel }}
+
+- name: Define AI Stores NVIDIA APT source
+  ansible.builtin.set_fact:
+    nvidia_ai_stores_source: /etc/apt/sources.list.d/90-graystone-ai-stores-nvidia.list
+
+- name: Verify AI Stores APT repository is reachable
+  ansible.builtin.uri:
+    url: "{{ daedalus_nvidia.apt_repository }}/dists/noble/Release"
+    method: HEAD
+    status_code: 200
+  changed_when: false
+
+- name: Install AI Stores NVIDIA APT source
+  ansible.builtin.copy:
+    dest: "{{ nvidia_ai_stores_source }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      deb [trusted=yes] {{ daedalus_nvidia.apt_repository }} noble main
+
+- name: Update APT metadata from AI Stores only
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - -o
+      - "Dir::Etc::sourcelist={{ nvidia_ai_stores_source }}"
+      - -o
+      - "Dir::Etc::sourceparts=-"
+      - update
+  changed_when: false
+
+- name: Check existing NVIDIA DKMS state
+  ansible.builtin.command:
+    cmd: dkms status
+  register: existing_dkms_status
+  changed_when: false
+  failed_when: false
+
+- name: Record NVIDIA installation start
+  ansible.builtin.set_fact:
+    nvidia_install_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    nvidia_install_start_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  when: >-
+    'nvidia/' ~ daedalus_nvidia.driver_version ~ ', ' ~ daedalus_kernel.version
+    not in existing_dkms_status.stdout
+
+- name: Report NVIDIA installation start
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: NVIDIA {{ daedalus_nvidia.driver_version }}
+      installation from AI Stores started at
+      {{ nvidia_install_start_time }}.
+  when: >-
+    'nvidia/' ~ daedalus_nvidia.driver_version ~ ', ' ~ daedalus_kernel.version
+    not in existing_dkms_status.stdout
+
+- name: Install NVIDIA from AI Stores
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - -o
+      - "Dir::Etc::sourcelist={{ nvidia_ai_stores_source }}"
+      - -o
+      - "Dir::Etc::sourceparts=-"
+      - install
+      - -y
+      - "{{ daedalus_nvidia.package }}={{ daedalus_nvidia.package_version }}"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when: >-
+    'nvidia/' ~ daedalus_nvidia.driver_version ~ ', ' ~ daedalus_kernel.version
+    not in existing_dkms_status.stdout
+
+- name: Record NVIDIA installation completion
+  ansible.builtin.set_fact:
+    nvidia_install_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
+    nvidia_install_end_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  when: >-
+    'nvidia/' ~ daedalus_nvidia.driver_version ~ ', ' ~ daedalus_kernel.version
+    not in existing_dkms_status.stdout
+
+- name: Report NVIDIA installation complete
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: NVIDIA installation completed at
+      {{ nvidia_install_end_time }}.
+      Elapsed:
+      {{
+        (nvidia_install_end_epoch | int) -
+        (nvidia_install_start_epoch | int)
+      }} seconds.
+  when: >-
+    'nvidia/' ~ daedalus_nvidia.driver_version ~ ', ' ~ daedalus_kernel.version
+    not in existing_dkms_status.stdout
+
+- name: Verify NVIDIA DKMS state
+  ansible.builtin.command:
+    cmd: dkms status
+  register: dkms_status
+  changed_when: false
+
+- name: Require NVIDIA DKMS module for approved kernel
+  ansible.builtin.assert:
+    that:
+      - >-
+        'nvidia/' ~ daedalus_nvidia.driver_version ~ ', ' ~
+        daedalus_kernel.version in dkms_status.stdout
+    fail_msg: >-
+      NVIDIA DKMS module was not built for {{ daedalus_kernel.version }}
+
+- name: Verify NVIDIA kernel module
+  ansible.builtin.command:
+    cmd: modinfo -k "{{ daedalus_kernel.version }}" nvidia
+  changed_when: false

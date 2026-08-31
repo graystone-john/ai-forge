@@ -1,0 +1,6 @@
+---
+- name: Apply kernel policy
+  ansible.builtin.include_tasks: kernel-policy.yaml
+
+- name: Configure NVIDIA from AI Stores
+  ansible.builtin.include_tasks: nvidia.yaml

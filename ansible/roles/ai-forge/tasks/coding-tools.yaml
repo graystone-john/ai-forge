@@ -1,0 +1,3 @@
+---
+- name: Configure coding agent
+  ansible.builtin.include_tasks: coding-agent.yaml

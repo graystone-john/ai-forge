@@ -10,7 +10,9 @@ daedalus_kernel:
 
 daedalus_nvidia:
   driver_version: "595.84"
-  bundle_name: "nvidia-595-kernel-6.8.0-100"
+  package: "nvidia-driver-595-open"
+  package_version: "595.84-0ubuntu0.24.04.1"
+  apt_repository: "http://10.10.10.1:81/ai-stores/vault/linux/ubuntu/apt"
 
 daedalus_network:
   wifi_interface: wlp8s0

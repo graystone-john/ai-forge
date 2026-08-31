@@ -1,0 +1,6 @@
+---
+- name: Deploy model
+  ansible.builtin.include_tasks: model.yaml
+
+- name: Configure llama runtime
+  ansible.builtin.include_tasks: llama-runtime.yaml

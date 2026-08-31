@@ -19,7 +19,8 @@ case "$MODE" in
         ;;
 esac
 
-STATE_DIR="${HOME}/graystone/provisioning-data/state/${MACHINE}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+STATE_DIR="${ROOT}/runtime/state/${MACHINE}"
 
 mkdir -p "$STATE_DIR"
 

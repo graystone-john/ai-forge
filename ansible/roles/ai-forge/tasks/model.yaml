@@ -1,0 +1,14 @@
+---
+- name: Define llama Hugging Face cache paths
+  ansible.builtin.set_fact:
+    llama_cache_root: "{{ inference.operational_home }}/.cache/huggingface/hub"
+    llama_model_blob: "{{ inference.operational_home }}/.cache/huggingface/hub/models--meta-models--Muse-Glimmer-30B-GGUF/blobs/{{ model.model_checksum }}"
+    llama_projector_blob: "{{ inference.operational_home }}/.cache/huggingface/hub/models--meta-models--Muse-Glimmer-30B-GGUF/blobs/{{ model.projector_checksum }}"
+
+- name: Create normal llama Hugging Face cache root
+  ansible.builtin.file:
+    path: "{{ llama_cache_root }}"
+    state: directory
+    owner: "{{ inference.operational_user }}"
+    group: "{{ inference.operational_user }}"
+    mode: "0755"

@@ -1,0 +1,15 @@
+---
+- name: Apply Daedalus hardware baseline
+  ansible.builtin.include_tasks: daedalus-base.yaml
+
+- name: Apply kernel policy
+  ansible.builtin.include_tasks: kernel-policy.yaml
+
+- name: Configure networking
+  ansible.builtin.include_tasks: network.yaml
+
+- name: Verify utilities
+  ansible.builtin.include_tasks: utilities.yaml
+
+- name: Configure NVIDIA
+  ansible.builtin.include_tasks: nvidia.yaml
