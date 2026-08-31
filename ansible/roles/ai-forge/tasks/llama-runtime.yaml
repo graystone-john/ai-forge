@@ -11,6 +11,28 @@
     llama_prefetch_log: "/var/tmp/ai-forge-llama-prefetch.log"
     inference_service_unit: "{{ inference.service_name }}.service"
 
+- name: Check existing system-wide llama runtime
+  ansible.builtin.stat:
+    path: "{{ llama_system_binary }}"
+    checksum_algorithm: sha256
+  register: existing_system_llama
+
+- name: Determine whether llama installation is required
+  ansible.builtin.set_fact:
+    llama_install_required: >-
+      {{
+        (not existing_system_llama.stat.exists)
+        or
+        (existing_system_llama.stat.checksum | default('') != llama_runtime.checksum)
+      }}
+
+- name: Report existing valid llama runtime
+  ansible.builtin.debug:
+    msg: >-
+      AI Forge: system-wide llama {{ llama_runtime.version }} is already
+      installed and matches the expected checksum; installation skipped.
+  when: not llama_install_required
+
 - name: Create temporary llama installer staging home
   ansible.builtin.file:
     path: "{{ llama_stage_home }}"
@@ -18,6 +40,7 @@
     owner: ai-forge
     group: ai-forge
     mode: "0755"
+  when: llama_install_required
 
 - name: Copy preserved offline llama installer from AI Stores
   ansible.builtin.copy:
@@ -26,29 +49,34 @@
     owner: ai-forge
     group: ai-forge
     mode: "0755"
+  when: llama_install_required
 
 - name: Verify offline llama installer checksum
   ansible.builtin.command:
     cmd: sha256sum "{{ llama_installer_dst }}"
   register: llama_installer_checksum
   changed_when: false
+  when: llama_install_required
 
 - name: Require expected offline llama installer checksum
   ansible.builtin.assert:
     that:
       - llama_runtime.installer_checksum in llama_installer_checksum.stdout
     fail_msg: "Offline llama installer checksum mismatch"
+  when: llama_install_required
 
 - name: Record llama installation start
   ansible.builtin.set_fact:
     llama_install_start_epoch: "{{ lookup('pipe', 'date +%s') }}"
     llama_install_start_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  when: llama_install_required
 
 - name: Report llama installation start
   ansible.builtin.debug:
     msg: >-
       AI Forge: llama {{ llama_runtime.version }} system installation
       from AI Stores started at {{ llama_install_start_time }}.
+  when: llama_install_required
 
 - name: Run official llama installer against AI Stores
   ansible.builtin.command:
@@ -61,24 +89,28 @@
     LLAMA_REPO: "{{ llama_runtime.repository }}"
   register: llama_install
   changed_when: true
+  when: llama_install_required
 
 - name: Verify staged llama checksum
   ansible.builtin.command:
     cmd: sha256sum "{{ llama_staged_binary }}"
   register: llama_staged_checksum
   changed_when: false
+  when: llama_install_required
 
 - name: Require expected staged llama checksum
   ansible.builtin.assert:
     that:
       - llama_runtime.checksum in llama_staged_checksum.stdout
     fail_msg: "Staged llama runtime checksum mismatch"
+  when: llama_install_required
 
 - name: Verify staged llama version
   ansible.builtin.command:
     cmd: "{{ llama_staged_binary }} version"
   register: llama_staged_version
   changed_when: false
+  when: llama_install_required
 
 - name: Require expected llama build
   ansible.builtin.assert:
@@ -89,11 +121,13 @@
       Unexpected llama runtime version:
       stdout={{ llama_staged_version.stdout | default('') }}
       stderr={{ llama_staged_version.stderr | default('') }}
+  when: llama_install_required
 
 - name: Remove previous system llama path before system installation
   ansible.builtin.file:
     path: "{{ llama_system_binary }}"
     state: absent
+  when: llama_install_required
 
 - name: Install llama system-wide
   ansible.builtin.copy:
@@ -103,6 +137,13 @@
     owner: root
     group: root
     mode: "0755"
+  when: llama_install_required
+
+- name: Remove temporary llama installer staging directory
+  ansible.builtin.file:
+    path: "{{ llama_stage_root }}"
+    state: absent
+  when: llama_install_required
 
 - name: Verify system-wide llama checksum
   ansible.builtin.command:
@@ -116,10 +157,18 @@
       - llama_runtime.checksum in llama_system_checksum.stdout
     fail_msg: "System-wide llama runtime checksum mismatch"
 
-- name: Remove temporary llama installer staging directory
-  ansible.builtin.file:
-    path: "{{ llama_stage_root }}"
-    state: absent
+- name: Verify system-wide llama version
+  ansible.builtin.command:
+    cmd: "{{ llama_system_binary }} version"
+  register: llama_system_version
+  changed_when: false
+
+- name: Require expected system-wide llama build
+  ansible.builtin.assert:
+    that:
+      - "'build 10612' in ((llama_system_version.stdout | default('')) ~ (llama_system_version.stderr | default('')))"
+      - "'commit 758443071' in ((llama_system_version.stdout | default('')) ~ (llama_system_version.stderr | default('')))"
+    fail_msg: "Unexpected installed llama runtime version"
 
 - name: Check cached Muse model
   ansible.builtin.stat:
@@ -300,6 +349,7 @@
   ansible.builtin.set_fact:
     llama_install_end_epoch: "{{ lookup('pipe', 'date +%s') }}"
     llama_install_end_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+  when: llama_install_required
 
 - name: Report llama installation completion
   ansible.builtin.debug:
@@ -310,6 +360,7 @@
         (llama_install_end_epoch | int) -
         (llama_install_start_epoch | int)
       }} seconds.
+  when: llama_install_required
 
 - name: Install inference systemd service
   ansible.builtin.template:
