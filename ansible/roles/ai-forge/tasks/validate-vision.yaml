@@ -1,7 +1,7 @@
 ---
 - name: Define vision validation paths
   ansible.builtin.set_fact:
-    vision_dataset_local: "{{ lookup('env', 'HOME') }}/graystone/test-data/vision/v1"
+    vision_dataset_local: "{{ lookup('env', 'HOME') }}/graystone/ai-stores/vault/graystone/muse-glimmer-30b/vision/v1"
     vision_dataset_remote: /var/lib/ai-forge/validation/vision/v1
     vision_run_id: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%S%NZ') }}"
 
@@ -27,6 +27,14 @@
     owner: root
     group: root
     mode: preserve
+
+- name: Copy Frost-only validation specification
+  ansible.builtin.copy:
+    src: "{{ role_path }}/../../../tests/vision/v1/prompts.json"
+    dest: "{{ vision_dataset_remote }}/prompts.json"
+    owner: root
+    group: root
+    mode: "0644"
 
 - name: Install vision validation runner
   ansible.builtin.copy:

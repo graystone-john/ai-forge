@@ -32,7 +32,7 @@
 
 - name: Copy Hermes test dataset from Athena
   ansible.builtin.copy:
-    src: "{{ lookup('env', 'HOME') }}/graystone/test-data/hermes-vision/v1/"
+    src: "{{ lookup('env', 'HOME') }}/graystone/ai-stores/vault/graystone/muse-glimmer-30b/vision/v1/"
     dest: "{{ hermes_vision_dataset }}/"
     owner: root
     group: root
