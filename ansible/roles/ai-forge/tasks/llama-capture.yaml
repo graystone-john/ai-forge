@@ -91,6 +91,36 @@
   delegate_to: localhost
   become: false
 
+- name: Locate captured build evidence
+  ansible.builtin.find:
+    paths: "{{ llama_capture.archive | dirname }}/metadata"
+    recurse: true
+    file_type: file
+  register: llama_capture_evidence
+
+- name: Preserve selected build evidence on Athena
+  ansible.builtin.fetch:
+    src: "{{ item.path }}"
+    dest: >-
+      {{ llama_capture_store }}/evidence/{{
+      item.path | relpath((llama_capture.archive | dirname) ~ '/metadata') }}
+    flat: true
+  loop: "{{ llama_capture_evidence.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  when: >-
+    (item.path | basename) not in
+    ['installed-packages.tsv', 'provenance.json']
+  become: false
+
+- name: Write captured runtime documentation on Athena
+  ansible.builtin.template:
+    src: llama-capture-README.md.j2
+    dest: "{{ llama_capture_store }}/README.md"
+    mode: "0644"
+  delegate_to: localhost
+  become: false
+
 - name: Report saved runtime
   ansible.builtin.debug:
     msg:

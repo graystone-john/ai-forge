@@ -1,0 +1,71 @@
+# llama.cpp {{ llama_source_build.version }} — captured runtime
+
+## Artifact identity
+
+- Configuration: {{ llama_capture.provenance.configuration_id }}
+- Source: {{ llama_capture.provenance.source_upstream }}
+- Commit: {{ llama_capture.provenance.source_commit }}
+- Capture ID: {{ llama_capture.capture_id }}
+- Captured at UTC: {{ llama_capture.provenance.captured_at_utc }}
+- Archive: llama-runtime.tar.gz
+- SHA256: {{ llama_capture.sha256 }}
+
+The timestamp records capture, not compilation.
+This is a locally compiled runtime, not an upstream prebuilt release.
+
+## Recorded build configuration
+
+- Platform: {{ llama_source_build.platform | to_json }}
+- CUDA architectures: {{ llama_source_build.cuda_architectures }}
+- Native CPU optimization: {{ llama_source_build.cpu_native }}
+- C compiler: {{ llama_source_build.c_compiler }}
+- C++ compiler: {{ llama_source_build.cxx_compiler }}
+- CUDA compiler: {{ llama_source_build.cuda_compiler }}
+
+See build-profile.json for the selected profile and evidence/CMakeCache.txt
+for the recorded CMake configuration. Compiler versions are in evidence/.
+CUDA host compiler details are recorded in evidence/cmake-compilers/.
+
+## Recorded GPU and driver
+
+```text
+{{ lookup('file', llama_capture_store ~ '/evidence/gpu.txt') }}
+```
+
+These are recorded GPU names, compute capabilities, and driver versions.
+They describe the capture machine; they are not proven minimum requirements.
+
+## Recorded CPU, OS, and kernel
+
+CPU details and instruction flags: evidence/cpu.txt.
+Operating system: evidence/os-release.txt.
+Kernel: evidence/kernel.txt.
+
+When native CPU optimization is enabled, deployment to another CPU requires
+compatibility validation. Other GPU architectures may require rebuilding.
+
+## Deployment requirements
+
+Preserve the runtime directory layout and symbolic links.
+Install the separately recorded runtime dependencies and NVIDIA driver.
+See evidence/linked-libraries.txt for observed library resolution.
+The build profile describes build inputs, not a minimal runtime dependency set.
+
+Models, projectors, Hermes, and service configuration are separate.
+
+## Validation at capture
+
+{{ llama_capture.provenance.validation | to_nice_json }}
+
+Capture checks do not establish model inference or Hermes functionality.
+Record subsequent deployment and inference results separately; preserve
+this capture-time record.
+
+## Supporting records
+
+- provenance.json: capture identity and recorded checks.
+- build-profile.json: selected build profile.
+- llama-runtime.tar.gz.sha256: archive integrity.
+- evidence/: hardware, software, and build records.
+
+The runtime archive requires separate backup when it is not stored in Git.
