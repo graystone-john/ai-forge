@@ -9,8 +9,8 @@
   ansible.builtin.set_fact:
     vision_report_remote: "/var/lib/ai-forge/validation/vision/{{ vision_run_id }}.json"
     vision_results_local: >-
-      {{ lookup('env', 'HOME') }}/graystone/test-results/vision/v1/{{
-      model.id }}/{{ llama_prebuilt.version }}/{{ inventory_hostname }}
+      {{ lookup('env', 'HOME') }}/graystone/ai-stores/vault/graystone/{{
+      model.id }}/vision/v1/results/direct/{{ llama_prebuilt.version }}/{{ inventory_hostname }}
 
 - name: Create target vision dataset directory
   ansible.builtin.file:

@@ -35,11 +35,11 @@ certify detailed diagram accuracy or distinguish memorized poem text from OCR.
 
 ## Results on Athena
 
-Under ~/graystone/test-results/:
+Under ~/graystone/ai-stores/vault/graystone/muse-glimmer-30b/vision/v1/results/:
 
-- vision/v1/muse-glimmer-30b/b10612/daedalus-01/20260907T044331902450491Z.json
-- vision/v1/muse-glimmer-30b/b10612/daedalus-01/20260907T045455520925001Z.json
-- hermes-vision/v1/muse-glimmer-30b/daedalus-01/20260907T051305052848927Z.json
+- direct/b10612/daedalus-01/20260907T044331902450491Z.json
+- direct/b10612/daedalus-01/20260907T045455520925001Z.json
+- hermes/daedalus-01/20260907T051305052848927Z.json
 
 Routine Frost API test: approximately 19 seconds.
 Three Hermes image tests: approximately 3 minutes 55 seconds.

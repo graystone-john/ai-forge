@@ -115,8 +115,8 @@
 - name: Define Athena Hermes results directory
   ansible.builtin.set_fact:
     hermes_vision_results_dir: >-
-      {{ lookup('env', 'HOME') }}/graystone/test-results/hermes-vision/v1/{{
-      model.id }}/{{ inventory_hostname }}
+      {{ lookup('env', 'HOME') }}/graystone/ai-stores/vault/graystone/{{
+      model.id }}/vision/v1/results/hermes/{{ inventory_hostname }}
 
 - name: Create Hermes results directory on Athena
   ansible.builtin.file:
