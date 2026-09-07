@@ -1,0 +1,73 @@
+#!/usr/bin/python3
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+root = Path(sys.argv[1]).resolve()
+commit = sys.argv[2]
+runtime = root / "runtime"
+manifest = json.loads(
+    (root / "metadata/runtime-files.json").read_text()
+)
+
+actual = {
+    path.relative_to(runtime).as_posix()
+    for path in runtime.rglob("*")
+    if path.is_symlink() or not path.is_dir()
+}
+if actual != set(manifest):
+    missing = sorted(set(manifest) - actual)
+    extra = sorted(actual - set(manifest))
+    raise SystemExit(f"Runtime inventory mismatch: missing={missing}, extra={extra}")
+
+for name, record in manifest.items():
+    path = runtime / name
+    if record["type"] == "symlink":
+        if not path.is_symlink() or os.readlink(path) != record["target"]:
+            raise SystemExit(f"Symbolic link mismatch: {name}")
+        if not path.resolve(strict=True).is_relative_to(runtime):
+            raise SystemExit(f"Symbolic link leaves runtime: {name}")
+    elif record["type"] == "file":
+        if path.is_symlink() or not path.is_file():
+            raise SystemExit(f"Expected regular file: {name}")
+        with path.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        if digest != record["sha256"]:
+            raise SystemExit(f"File checksum mismatch: {name}")
+        if (path.stat().st_mode & 0o7777) != int(record["mode"], 8):
+            raise SystemExit(f"File permissions mismatch: {name}")
+    else:
+        raise SystemExit(f"Unknown manifest entry type: {name}")
+
+environment = dict(os.environ)
+environment.pop("LD_LIBRARY_PATH", None)
+
+def run(command):
+    return subprocess.check_output(
+        command, text=True, stderr=subprocess.STDOUT, env=environment
+    ).strip()
+
+server = runtime / "bin/llama-server"
+version = run([str(server), "--version"])
+if f"commit {commit[:9]}" not in version:
+    raise SystemExit(f"Unexpected server version: {version}")
+
+linked = run(["ldd", str(server)])
+if "not found" in linked:
+    raise SystemExit(f"Unresolved libraries:\n{linked}")
+
+for line in linked.splitlines():
+    if "=>" not in line:
+        continue
+    name, target = line.split("=>", 1)
+    if name.strip().startswith(("libllama", "libggml", "libmtmd")):
+        library = Path(target.strip().split()[0]).resolve()
+        if not library.is_relative_to(runtime):
+            raise SystemExit(f"Library resolved outside runtime: {line}")
+
+print(version)
+print("Installed file hashes, permissions, and symbolic links verified.")
+print("Server libraries resolve within the installed runtime.")

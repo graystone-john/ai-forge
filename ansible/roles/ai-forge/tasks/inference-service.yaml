@@ -1,0 +1,85 @@
+---
+- name: Install inference systemd service
+  ansible.builtin.template:
+    src: ai-forge-inference.service.j2
+    dest: "/etc/systemd/system/{{ inference.service_name }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  register: inference_service_template
+
+- name: Reload systemd after service change
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: inference_service_template.changed
+
+- name: Restart inference after runtime, model, or service change
+  ansible.builtin.systemd:
+    name: "{{ inference.service_name }}.service"
+    state: restarted
+    enabled: true
+  when: >-
+    inference_service_template.changed or
+    (llama_prebuilt_restore.changed | default(false)) or
+    (llama_model_acquisition.changed | default(false))
+
+- name: Enable and start inference service
+  ansible.builtin.systemd:
+    name: "{{ inference.service_name }}.service"
+    state: started
+    enabled: true
+
+- name: Wait for inference model readiness
+  ansible.builtin.uri:
+    url: "http://{{ inference.host }}:{{ inference.port }}/health"
+    method: GET
+    status_code: 200
+  register: inference_health
+  retries: 120
+  delay: 5
+  until: inference_health.status | default(0) == 200
+
+- name: Read available inference models
+  ansible.builtin.uri:
+    url: "http://{{ inference.host }}:{{ inference.port }}/v1/models"
+    method: GET
+    return_content: true
+    status_code: 200
+  register: inference_models
+
+- name: Require selected model in inference API
+  ansible.builtin.assert:
+    that:
+      - model.id in (inference_models.json.data | map(attribute='id') | list)
+
+- name: Read inference service process
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - "--property=MainPID"
+      - "--value"
+      - "{{ inference.service_name }}.service"
+  register: inference_pid
+  changed_when: false
+
+- name: Require running inference process
+  ansible.builtin.assert:
+    that:
+      - inference_pid.stdout | trim | int > 1
+
+- name: Verify live inference executable
+  ansible.builtin.command:
+    argv:
+      - readlink
+      - "-f"
+      - "/proc/{{ inference_pid.stdout | trim }}/exe"
+  register: inference_executable
+  changed_when: false
+
+- name: Require deployed prebuilt server
+  ansible.builtin.assert:
+    that:
+      - >-
+        inference_executable.stdout | trim ==
+        llama_prebuilt.root ~ '/runtime/bin/llama-server'

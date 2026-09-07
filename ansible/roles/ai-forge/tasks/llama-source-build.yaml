@@ -1,0 +1,214 @@
+---
+- name: Require matching build platform
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == llama_source_build.platform.distribution
+      - ansible_distribution_release == llama_source_build.platform.release
+      - ansible_architecture == llama_source_build.platform.architecture
+    fail_msg: "This machine does not match the selected llama.cpp build configuration"
+
+- name: Define permanent build paths
+  ansible.builtin.set_fact:
+    llama_source_dir: "{{ llama_source_build.root }}/source"
+    llama_build_dir: "{{ llama_source_build.root }}/build"
+    llama_source_repository: "{{ llama_source_build.root }}/source.git"
+    llama_build_apt_source: "{{ llama_source_build.root }}/build-deps.list"
+    llama_build_apt_lists: "{{ llama_source_build.root }}/apt-lists"
+
+- name: Create build and APT directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ llama_source_build.root }}"
+    - "{{ llama_build_apt_lists }}"
+    - "{{ llama_build_apt_lists }}/partial"
+
+- name: Configure build dependency source
+  ansible.builtin.copy:
+    dest: "{{ llama_build_apt_source }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      deb [arch=amd64 trusted=yes] {{ llama_source_build.apt_repository }} noble main
+
+- name: Read exact dependency manifest from AI Stores
+  ansible.builtin.set_fact:
+    llama_build_package_lines: >-
+      {{ lookup('file', llama_source_build.package_manifest).splitlines()
+         | reject('match', '^\s*(#|$)') | list }}
+    llama_build_packages: []
+
+- name: Require a nonempty dependency manifest
+  ansible.builtin.assert:
+    that:
+      - llama_build_package_lines | length > 0
+
+- name: Validate dependency manifest rows
+  ansible.builtin.assert:
+    that:
+      - item.split() | length == 2
+  loop: "{{ llama_build_package_lines }}"
+  loop_control:
+    label: "{{ item.split() | first }}"
+
+- name: Assemble exact package specifications
+  ansible.builtin.set_fact:
+    llama_build_packages: >-
+      {{ llama_build_packages + [item.split()[0] ~ '=' ~ item.split()[1]] }}
+  loop: "{{ llama_build_package_lines }}"
+  loop_control:
+    label: "{{ item.split() | first }}"
+
+- name: Define isolated APT command
+  ansible.builtin.set_fact:
+    llama_build_apt_command:
+      - apt-get
+      - -o
+      - "Dir::Etc::sourcelist={{ llama_build_apt_source }}"
+      - -o
+      - "Dir::Etc::sourceparts=-"
+      - -o
+      - "Dir::State::lists={{ llama_build_apt_lists }}"
+
+- name: Report dependency installation start
+  ansible.builtin.debug:
+    msg: >-
+      Installing build dependencies from AI Stores.
+      Started: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
+
+- name: Update build dependency metadata from AI Stores only
+  ansible.builtin.command:
+    argv: "{{ llama_build_apt_command + ['update'] }}"
+  changed_when: false
+
+- name: Resolve exact build dependencies before installation
+  ansible.builtin.command:
+    argv: >-
+      {{ llama_build_apt_command +
+         ['--simulate', '--no-install-recommends', '--no-remove', 'install'] +
+         llama_build_packages }}
+  changed_when: false
+
+- name: Install exact build dependencies from AI Stores
+  ansible.builtin.command:
+    argv: >-
+      {{ llama_build_apt_command +
+         ['--yes', '--no-install-recommends', '--no-remove', 'install'] +
+         llama_build_packages }}
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    LC_ALL: C
+  register: llama_build_dependencies
+  changed_when: "'0 upgraded, 0 newly installed' not in llama_build_dependencies.stdout"
+
+- name: Report dependency installation completion
+  ansible.builtin.debug:
+    msg:
+      - "Ended: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+      - "APT elapsed: {{ llama_build_dependencies.delta }}"
+
+- name: Copy preserved source repository from AI Stores
+  ansible.builtin.copy:
+    src: "{{ llama_source_build.source_store }}/"
+    dest: "{{ llama_source_repository }}/"
+    owner: root
+    group: root
+    mode: preserve
+
+- name: Check out pinned source from local repository
+  ansible.builtin.git:
+    repo: "{{ llama_source_repository }}"
+    dest: "{{ llama_source_dir }}"
+    version: "{{ llama_source_build.commit }}"
+    recursive: false
+    update: false
+    force: false
+
+- name: Copy preserved UI archive
+  ansible.builtin.copy:
+    src: "{{ llama_source_build.ui_archive }}"
+    dest: "{{ llama_source_build.root }}/ui-dist.tar.gz"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Check UI archive integrity
+  ansible.builtin.stat:
+    path: "{{ llama_source_build.root }}/ui-dist.tar.gz"
+    checksum_algorithm: sha256
+  register: llama_build_ui
+
+- name: Require matching UI archive
+  ansible.builtin.assert:
+    that:
+      - llama_build_ui.stat.checksum == llama_source_build.ui_sha256
+
+- name: Create UI asset directory
+  ansible.builtin.file:
+    path: "{{ llama_source_dir }}/tools/ui/dist"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Extract preserved UI assets
+  ansible.builtin.unarchive:
+    src: "{{ llama_source_build.root }}/ui-dist.tar.gz"
+    dest: "{{ llama_source_dir }}/tools/ui/dist"
+    remote_src: true
+    owner: root
+    group: root
+
+- name: Install reusable llama.cpp build script
+  ansible.builtin.copy:
+    src: build-llama
+    dest: /usr/local/sbin/ai-forge-build-llama
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Report compilation start
+  ansible.builtin.debug:
+    msg: >-
+      Compiling {{ llama_source_build.configuration_id }}.
+      Started: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
+
+- name: Compile and report llama.cpp
+  block:
+    - name: Compile pinned llama.cpp
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/ai-forge-build-llama
+      environment:
+        LLAMA_SOURCE_DIR: "{{ llama_source_dir }}"
+        LLAMA_BUILD_DIR: "{{ llama_build_dir }}"
+        LLAMA_INSTALL_DIR: "{{ llama_source_build.root }}/runtime"
+        LLAMA_COMMIT: "{{ llama_source_build.commit }}"
+        LLAMA_CUDA_ARCHITECTURES: "{{ llama_source_build.cuda_architectures }}"
+        LLAMA_CPU_NATIVE: "{{ llama_source_build.cpu_native }}"
+        LLAMA_C_COMPILER: "{{ llama_source_build.c_compiler }}"
+        LLAMA_CXX_COMPILER: "{{ llama_source_build.cxx_compiler }}"
+        LLAMA_CUDA_COMPILER: "{{ llama_source_build.cuda_compiler }}"
+        LLAMA_BUILD_JOBS: "{{ llama_source_build.jobs | default(ansible_processor_vcpus) | string }}"
+      register: llama_compile
+      changed_when: true
+
+    - name: Require expected compiled version
+      ansible.builtin.assert:
+        that:
+          - "'build 10612' in (llama_compile.stdout ~ llama_compile.stderr)"
+          - "'commit 758443071' in (llama_compile.stdout ~ llama_compile.stderr)"
+        fail_msg: "Compiled runtime version does not match the recorded build"
+
+  always:
+    - name: Report compilation output
+      ansible.builtin.debug:
+        msg:
+          - "{{ llama_compile.stdout_lines | default([]) }}"
+          - "{{ llama_compile.stderr_lines | default([]) }}"
+          - "Elapsed: {{ llama_compile.delta | default('unavailable') }}"

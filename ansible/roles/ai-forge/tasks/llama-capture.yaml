@@ -1,0 +1,101 @@
+---
+- name: Report runtime capture start
+  ansible.builtin.debug:
+    msg: >-
+      Capturing installed llama.cpp.
+      Started: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
+
+- name: Install runtime capture helper
+  ansible.builtin.copy:
+    src: capture-llama
+    dest: /usr/local/sbin/ai-forge-capture-llama
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Capture installed runtime and build evidence
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/ai-forge-capture-llama
+      - --root
+      - "{{ llama_source_build.root }}"
+      - --commit
+      - "{{ llama_source_build.commit }}"
+      - --configuration
+      - "{{ llama_source_build.configuration_id }}"
+  register: llama_capture_command
+  changed_when: true
+
+- name: Read capture result
+  ansible.builtin.set_fact:
+    llama_capture: "{{ llama_capture_command.stdout | from_json }}"
+
+- name: Define Athena artifact destination
+  ansible.builtin.set_fact:
+    llama_capture_store: >-
+      {{ ai_stores_root }}/vault/graystone/llama.cpp/{{
+      llama_source_build.version }}/{{
+      llama_source_build.configuration_id }}/{{
+      llama_capture.capture_id }}
+
+- name: Create artifact destination on Athena
+  ansible.builtin.file:
+    path: "{{ llama_capture_store }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+
+- name: Transfer installed runtime archive to Athena
+  ansible.builtin.fetch:
+    src: "{{ llama_capture.archive }}"
+    dest: "{{ llama_capture_store }}/llama-runtime.tar.gz"
+    flat: true
+  become: false
+
+- name: Calculate archive SHA256 on Athena
+  ansible.builtin.stat:
+    path: "{{ llama_capture_store }}/llama-runtime.tar.gz"
+    checksum_algorithm: sha256
+  register: llama_capture_local
+  delegate_to: localhost
+  become: false
+
+- name: Require matching transferred archive
+  ansible.builtin.assert:
+    that:
+      - llama_capture_local.stat.checksum == llama_capture.sha256
+    fail_msg: "Transferred runtime archive checksum mismatch"
+
+- name: Save artifact checksum on Athena
+  ansible.builtin.copy:
+    dest: "{{ llama_capture_store }}/llama-runtime.tar.gz.sha256"
+    mode: "0644"
+    content: "{{ llama_capture.sha256 }}  llama-runtime.tar.gz\n"
+  delegate_to: localhost
+  become: false
+
+- name: Save readable provenance on Athena
+  ansible.builtin.copy:
+    dest: "{{ llama_capture_store }}/provenance.json"
+    mode: "0644"
+    content: "{{ llama_capture.provenance | to_nice_json }}\n"
+  delegate_to: localhost
+  become: false
+
+- name: Preserve selected build profile on Athena
+  ansible.builtin.copy:
+    dest: "{{ llama_capture_store }}/build-profile.json"
+    mode: "0644"
+    content: "{{ llama_source_build | to_nice_json }}\n"
+  delegate_to: localhost
+  become: false
+
+- name: Report saved runtime
+  ansible.builtin.debug:
+    msg:
+      - "Saved: {{ llama_capture_store }}/llama-runtime.tar.gz"
+      - "SHA256: {{ llama_capture.sha256 }}"
+      - "Capture elapsed: {{ llama_capture_command.delta }}"
+      - "Completed: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+      - "Muse vision/Hermes and clean buildless deployment validation remain pending."

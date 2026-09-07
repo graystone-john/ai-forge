@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${LLAMA_SOURCE_DIR:?Required}"
+: "${LLAMA_BUILD_DIR:?Required}"
+: "${LLAMA_COMMIT:?Required}"
+: "${LLAMA_CUDA_ARCHITECTURES:?Required}"
+: "${LLAMA_CPU_NATIVE:?Required}"
+: "${LLAMA_C_COMPILER:?Required}"
+: "${LLAMA_CXX_COMPILER:?Required}"
+: "${LLAMA_CUDA_COMPILER:?Required}"
+
+START="$(date +%s)"
+echo "llama.cpp build started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+finish() {
+    result=$?
+    trap - EXIT
+    echo "llama.cpp build ended: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "Elapsed: $(( $(date +%s) - START )) seconds"
+    echo "Exit status: $result"
+    exit "$result"
+}
+trap finish EXIT
+
+for tool in git cmake gzip; do
+    command -v "$tool" >/dev/null || {
+        echo "ERROR: missing build tool: $tool" >&2
+        exit 1
+    }
+done
+
+for compiler in \
+    "$LLAMA_C_COMPILER" \
+    "$LLAMA_CXX_COMPILER" \
+    "$LLAMA_CUDA_COMPILER"
+do
+    [[ -x "$compiler" ]] || {
+        echo "ERROR: compiler is not executable: $compiler" >&2
+        exit 1
+    }
+done
+
+[[ "$LLAMA_CPU_NATIVE" == ON || "$LLAMA_CPU_NATIVE" == OFF ]] || {
+    echo "ERROR: LLAMA_CPU_NATIVE must be ON or OFF" >&2
+    exit 1
+}
+
+actual="$(git -C "$LLAMA_SOURCE_DIR" rev-parse HEAD)"
+[[ "$actual" == "$LLAMA_COMMIT" ]] || {
+    echo "ERROR: expected $LLAMA_COMMIT; found $actual" >&2
+    exit 1
+}
+
+[[ -z "$(git -C "$LLAMA_SOURCE_DIR" status --porcelain --untracked-files=no)" ]] || {
+    echo "ERROR: tracked source files have been modified" >&2
+    exit 1
+}
+
+[[ -s "$LLAMA_SOURCE_DIR/tools/ui/dist/index.html" ]] || {
+    echo "ERROR: preserved UI assets are missing" >&2
+    exit 1
+}
+
+: "${LLAMA_INSTALL_DIR:?Required}"
+
+cmake -S "$LLAMA_SOURCE_DIR" -B "$LLAMA_BUILD_DIR" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="$LLAMA_INSTALL_DIR" \
+    -DCMAKE_INSTALL_BINDIR=bin \
+    -DCMAKE_INSTALL_LIBDIR=lib \
+    -DCMAKE_BUILD_RPATH_USE_ORIGIN=ON \
+    '-DCMAKE_INSTALL_RPATH=$ORIGIN;$ORIGIN/../lib' \
+    -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF \
+    -DCMAKE_BUILD_WITH_INSTALL_RPATH=OFF \
+    -DCMAKE_C_COMPILER="$LLAMA_C_COMPILER" \
+    -DCMAKE_CXX_COMPILER="$LLAMA_CXX_COMPILER" \
+    -DCMAKE_CUDA_COMPILER="$LLAMA_CUDA_COMPILER" \
+    -DCMAKE_CUDA_ARCHITECTURES="$LLAMA_CUDA_ARCHITECTURES" \
+    -DGGML_NATIVE="$LLAMA_CPU_NATIVE" \
+    -DGGML_CUDA=ON \
+    -DGGML_CUDA_CUB_3DOT2=OFF \
+    -DBUILD_SHARED_LIBS=ON \
+    -DLLAMA_BUILD_COMMON=ON \
+    -DLLAMA_BUILD_TOOLS=ON \
+    -DLLAMA_BUILD_SERVER=ON \
+    -DLLAMA_TOOLS_INSTALL=ON \
+    -DLLAMA_BUILD_TESTS=OFF \
+    -DLLAMA_TESTS_INSTALL=OFF \
+    -DLLAMA_BUILD_EXAMPLES=OFF \
+    -DLLAMA_BUILD_APP=OFF \
+    -DLLAMA_BUILD_UI=OFF \
+    -DLLAMA_USE_PREBUILT_UI=OFF
+
+cmake --build "$LLAMA_BUILD_DIR" \
+    --parallel "${LLAMA_BUILD_JOBS:-$(nproc)}"
+
+echo "llama.cpp installation started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+cmake --install "$LLAMA_BUILD_DIR" --config Release
+
+echo "llama.cpp installation ended: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+env -u LD_LIBRARY_PATH \
+    "$LLAMA_INSTALL_DIR/bin/llama-server" --version

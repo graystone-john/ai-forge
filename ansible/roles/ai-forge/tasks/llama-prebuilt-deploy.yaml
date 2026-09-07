@@ -1,0 +1,280 @@
+---
+- name: Require matching prebuilt platform
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == llama_prebuilt.distribution
+      - ansible_distribution_release == llama_prebuilt.release
+      - ansible_architecture == llama_prebuilt.architecture
+
+- name: Read target CPU identity
+  ansible.builtin.command:
+    argv: [lscpu, --json]
+  environment:
+    LC_ALL: C
+  register: llama_target_cpu
+  changed_when: false
+
+- name: Require captured native CPU model
+  ansible.builtin.assert:
+    that:
+      - >-
+        ((llama_target_cpu.stdout | from_json).lscpu
+        | selectattr('field', 'equalto', 'Model name:')
+        | map(attribute='data') | first | trim)
+        == llama_prebuilt.cpu_model
+    fail_msg: "This native build requires the recorded Daedalus CPU model"
+
+- name: Read installed GPU and driver
+  ansible.builtin.command:
+    argv:
+      - nvidia-smi
+      - --query-gpu=name,compute_cap,driver_version
+      - --format=csv,noheader
+  register: llama_target_gpu
+  changed_when: false
+
+- name: Require captured single-GPU configuration
+  ansible.builtin.assert:
+    that:
+      - llama_target_gpu.stdout_lines | length == 1
+      - >-
+        llama_target_gpu.stdout | trim ==
+        llama_prebuilt.gpu_name ~ ', ' ~
+        llama_prebuilt.compute_capability ~ ', ' ~
+        llama_prebuilt.driver_version
+    fail_msg: "Install the recorded NVIDIA configuration before deploying this artifact"
+
+- name: Check deployment inputs on Athena
+  ansible.builtin.stat:
+    path: "{{ item.path }}"
+    checksum_algorithm: sha256
+  loop:
+    - path: "{{ llama_prebuilt.archive }}"
+      expected: "{{ llama_prebuilt.archive_sha256 }}"
+    - path: "{{ llama_prebuilt.package_manifest }}"
+      expected: "{{ llama_prebuilt.package_manifest_sha256 }}"
+  register: llama_deploy_inputs
+  delegate_to: localhost
+  become: false
+
+- name: Require pinned deployment inputs
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.checksum | default('') == item.item.expected
+    fail_msg: "Missing or changed deployment input: {{ item.item.path }}"
+  loop: "{{ llama_deploy_inputs.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+
+- name: Read exact runtime dependency manifest
+  ansible.builtin.set_fact:
+    llama_runtime_package_lines: >-
+      {{ lookup('file', llama_prebuilt.package_manifest).splitlines()
+         | reject('match', '^\s*(#|$)') | list }}
+
+- name: Require runtime dependencies
+  ansible.builtin.assert:
+    that:
+      - llama_runtime_package_lines | length > 0
+
+- name: Validate runtime dependency rows
+  ansible.builtin.assert:
+    that:
+      - item.split() | length == 2
+    quiet: true
+  loop: "{{ llama_runtime_package_lines }}"
+
+- name: Assemble runtime package specifications
+  ansible.builtin.set_fact:
+    llama_runtime_packages: >-
+      {{ llama_runtime_package_lines | map('split')
+         | map('join', '=') | list }}
+
+- name: Create permanent deployment directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ llama_prebuilt.root }}"
+    - "{{ llama_prebuilt.root }}/deploy"
+    - "{{ llama_prebuilt.root }}/deploy/apt-lists"
+    - "{{ llama_prebuilt.root }}/deploy/apt-lists/partial"
+
+- name: Configure runtime dependency source
+  ansible.builtin.copy:
+    dest: "{{ llama_prebuilt.root }}/deploy/runtime-deps.list"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      deb [arch=amd64 trusted=yes] {{ llama_prebuilt.apt_repository }} noble main
+
+- name: Define isolated runtime APT command
+  ansible.builtin.set_fact:
+    llama_runtime_apt:
+      - apt-get
+      - -o
+      - "Dir::Etc::sourcelist={{ llama_prebuilt.root }}/deploy/runtime-deps.list"
+      - -o
+      - "Dir::Etc::sourceparts=-"
+      - -o
+      - "Dir::State::lists={{ llama_prebuilt.root }}/deploy/apt-lists"
+
+- name: Report runtime dependency installation start
+  ansible.builtin.debug:
+    msg: "Runtime dependency installation started: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Update runtime metadata from AI Stores only
+  ansible.builtin.command:
+    argv: "{{ llama_runtime_apt + ['update'] }}"
+  changed_when: false
+
+- name: Resolve exact runtime dependencies
+  ansible.builtin.command:
+    argv: >-
+      {{ llama_runtime_apt +
+         ['--simulate', '--no-install-recommends', '--no-remove', 'install'] +
+         llama_runtime_packages }}
+  changed_when: false
+
+- name: Install exact runtime dependencies
+  ansible.builtin.command:
+    argv: >-
+      {{ llama_runtime_apt +
+         ['--yes', '--no-install-recommends', '--no-remove', 'install'] +
+         llama_runtime_packages }}
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    LC_ALL: C
+  register: llama_runtime_apt_result
+  changed_when: "'0 upgraded, 0 newly installed' not in llama_runtime_apt_result.stdout"
+
+- name: Report runtime dependency installation completion
+  ansible.builtin.debug:
+    msg:
+      - "Completed: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+      - "APT install elapsed: {{ llama_runtime_apt_result.delta }}"
+
+- name: Copy captured runtime from Athena
+  ansible.builtin.copy:
+    src: "{{ llama_prebuilt.archive }}"
+    dest: "{{ llama_prebuilt.root }}/deploy/llama-runtime.tar.gz"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Check transferred runtime archive
+  ansible.builtin.stat:
+    path: "{{ llama_prebuilt.root }}/deploy/llama-runtime.tar.gz"
+    checksum_algorithm: sha256
+  register: llama_deploy_archive
+
+- name: Require matching runtime archive
+  ansible.builtin.assert:
+    that:
+      - llama_deploy_archive.stat.checksum == llama_prebuilt.archive_sha256
+
+- name: Install verifier before inspecting existing runtime
+  ansible.builtin.copy:
+    src: verify-llama-runtime
+    dest: /usr/local/sbin/ai-forge-verify-llama-runtime
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Inspect existing prebuilt installation
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/ai-forge-verify-llama-runtime
+      - "{{ llama_prebuilt.root }}"
+      - "{{ llama_prebuilt.commit }}"
+  register: llama_prebuilt_existing
+  changed_when: false
+  failed_when: false
+
+- name: Check existing installation artifact identity
+  ansible.builtin.stat:
+    path: "{{ llama_prebuilt.root }}/deploy/installed-archive.sha256"
+  register: llama_prebuilt_marker
+
+- name: Read existing installation artifact identity
+  ansible.builtin.slurp:
+    src: "{{ llama_prebuilt.root }}/deploy/installed-archive.sha256"
+  register: llama_prebuilt_marker_content
+  when: llama_prebuilt_marker.stat.exists
+
+- name: Determine whether runtime restoration is required
+  ansible.builtin.set_fact:
+    llama_prebuilt_restore_required: >-
+      {{ llama_prebuilt_existing.rc != 0 or
+         (llama_prebuilt_marker_content.content | default('') |
+          b64decode | trim) != llama_prebuilt.archive_sha256 }}
+
+- name: Require runtime to be unused during deployment
+  ansible.builtin.shell: |
+    /usr/bin/python3 - <<'PY'
+    from pathlib import Path
+    import sys
+
+    runtime = {{ (llama_prebuilt.root ~ '/runtime/') | to_json }}
+    users = []
+    for process in Path("/proc").glob("[0-9]*"):
+        try:
+            mappings = (process / "maps").read_text()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if runtime in mappings:
+            users.append(process.name)
+    if users:
+        sys.exit("Stop processes using this runtime before deployment: " + ", ".join(users))
+    PY
+  args:
+    executable: /bin/bash
+  changed_when: false
+  when: llama_prebuilt_restore_required
+
+- name: Restore captured installation layout
+  ansible.builtin.unarchive:
+    src: "{{ llama_prebuilt.root }}/deploy/llama-runtime.tar.gz"
+    dest: "{{ llama_prebuilt.root }}"
+    remote_src: true
+    owner: root
+    group: root
+  register: llama_prebuilt_restore
+  when: llama_prebuilt_restore_required
+
+- name: Install runtime verification helper
+  ansible.builtin.copy:
+    src: verify-llama-runtime
+    dest: /usr/local/sbin/ai-forge-verify-llama-runtime
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Verify deployed runtime
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/ai-forge-verify-llama-runtime
+      - "{{ llama_prebuilt.root }}"
+      - "{{ llama_prebuilt.commit }}"
+  register: llama_deployed_verification
+  changed_when: false
+
+- name: Record verified installation artifact identity
+  ansible.builtin.copy:
+    dest: "{{ llama_prebuilt.root }}/deploy/installed-archive.sha256"
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ llama_prebuilt.archive_sha256 }}\n"
+
+- name: Report prebuilt deployment
+  ansible.builtin.debug:
+    msg:
+      - "{{ llama_deployed_verification.stdout_lines }}"
+      - "Server: {{ llama_prebuilt.root }}/runtime/bin/llama-server"
+      - "Deployment completed: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"

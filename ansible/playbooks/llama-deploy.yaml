@@ -1,0 +1,14 @@
+---
+- name: Deploy prebuilt llama.cpp from AI Stores
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - "{{ llama_deploy_profile | default(playbook_dir ~ '/../profiles/runtimes/llama-b10612-daedalus-prebuilt.yaml') }}"
+
+  tasks:
+    - name: Deploy through the existing AI Forge role
+      ansible.builtin.include_role:
+        name: ai-forge
+        tasks_from: llama-prebuilt-deploy.yaml

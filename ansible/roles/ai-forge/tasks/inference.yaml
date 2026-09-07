@@ -1,6 +1,9 @@
 ---
-- name: Deploy model
+- name: Deploy preserved prebuilt llama.cpp
+  ansible.builtin.include_tasks: llama-prebuilt-deploy.yaml
+
+- name: Deploy model and projector
   ansible.builtin.include_tasks: model.yaml
 
-- name: Configure llama runtime
-  ansible.builtin.include_tasks: llama-runtime.yaml
+- name: Configure inference service
+  ansible.builtin.include_tasks: inference-service.yaml

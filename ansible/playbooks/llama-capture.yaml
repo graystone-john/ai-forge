@@ -1,0 +1,18 @@
+---
+- name: Preserve installed llama.cpp in AI Stores
+  hosts: all
+  become: true
+  gather_facts: false
+  serial: 1
+
+  vars_files:
+    - "{{ llama_build_profile | default(playbook_dir ~ '/../profiles/runtimes/llama-b10612-daedalus.yaml') }}"
+
+  vars:
+    ai_stores_root: "/home/nispoe/graystone/ai-stores"
+
+  tasks:
+    - name: Capture through the existing AI Forge role
+      ansible.builtin.include_role:
+        name: ai-forge
+        tasks_from: llama-capture.yaml

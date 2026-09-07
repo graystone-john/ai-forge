@@ -6,6 +6,7 @@
 
   vars_files:
     - "../profiles/inference/{{ inference_profile }}.yaml"
+    - "{{ llama_deploy_profile | default(playbook_dir ~ '/../profiles/runtimes/llama-b10612-daedalus-prebuilt.yaml') }}"
 
   roles:
     - role: ai-forge

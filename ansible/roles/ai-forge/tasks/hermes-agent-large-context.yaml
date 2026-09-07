@@ -108,7 +108,8 @@
     executable: /bin/bash
     cmd: |
       set -euo pipefail
-      pid="$(pgrep -x llama | head -1)"
+      pid="$(systemctl show --property=MainPID --value {{ (inference.service_name ~ '.service') | quote }})"
+      test "$pid" -gt 1
       tr '\0' ' ' < "/proc/${pid}/cmdline"
   register: hermes_large_context_cmdline
   changed_when: false

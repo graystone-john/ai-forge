@@ -1,3 +1,4 @@
+{% set repository = inference.operational_home ~ '/.cache/huggingface/hub/models--' ~ (model.hf_repo | replace('/', '--')) %}
 [Unit]
 Description=AI Forge llama.cpp inference server - {{ model.id }}
 After=network.target
@@ -5,22 +6,23 @@ Wants=network.target
 
 [Service]
 Type=simple
-
 User={{ inference.operational_user }}
 Group={{ inference.operational_user }}
+WorkingDirectory={{ inference.operational_home }}
 
 Environment=HOME={{ inference.operational_home }}
 Environment=LLAMA_CACHE={{ inference.operational_home }}/.cache/huggingface/hub
 
 ExecStartPre=/bin/bash -c 'for i in {1..60}; do /usr/bin/nvidia-smi >/dev/null 2>&1 && exit 0; sleep 2; done; exit 1'
 
-ExecStart=/usr/local/bin/llama serve \
-  -hf {{ model.hf_repo }}:{{ model.hf_quant }} \
-  --offline \
+ExecStart={{ llama_prebuilt.root }}/runtime/bin/llama-server \
+  -m "{{ repository }}/blobs/{{ model.model_checksum }}" \
+  --mmproj "{{ repository }}/blobs/{{ model.projector_checksum }}" \
+  --mmproj-offload \
   --alias {{ model.id }} \
   --ctx-size {{ inference.context_size }} \
 {% if inference.dflash_enabled | default(false) %}
-  --spec-draft-model {{ inference.dflash_model }} \
+  --spec-draft-model "{{ inference.dflash_model }}" \
   --spec-type draft-dflash \
   --spec-draft-n-max {{ inference.dflash_n_max | default(15) }} \
 {% endif %}

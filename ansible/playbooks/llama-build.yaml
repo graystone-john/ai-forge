@@ -1,0 +1,14 @@
+---
+- name: Build llama.cpp from AI Stores
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - "{{ llama_build_profile | default(playbook_dir ~ '/../profiles/runtimes/llama-b10612-daedalus.yaml') }}"
+
+  tasks:
+    - name: Build through the existing AI Forge role
+      ansible.builtin.include_role:
+        name: ai-forge
+        tasks_from: llama-source-build.yaml

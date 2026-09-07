@@ -1,14 +1,68 @@
 ---
-- name: Define llama Hugging Face cache paths
+- name: Define model cache paths
   ansible.builtin.set_fact:
     llama_cache_root: "{{ inference.operational_home }}/.cache/huggingface/hub"
-    llama_model_blob: "{{ inference.operational_home }}/.cache/huggingface/hub/models--meta-models--Muse-Glimmer-30B-GGUF/blobs/{{ model.model_checksum }}"
-    llama_projector_blob: "{{ inference.operational_home }}/.cache/huggingface/hub/models--meta-models--Muse-Glimmer-30B-GGUF/blobs/{{ model.projector_checksum }}"
+    llama_model_repository: >-
+      {{ inference.operational_home }}/.cache/huggingface/hub/models--{{
+      model.hf_repo | replace('/', '--') }}
 
-- name: Create normal llama Hugging Face cache root
+- name: Define model and projector files
+  ansible.builtin.set_fact:
+    llama_model_blob: "{{ llama_model_repository }}/blobs/{{ model.model_checksum }}"
+    llama_projector_blob: "{{ llama_model_repository }}/blobs/{{ model.projector_checksum }}"
+    llama_snapshot_dir: "{{ llama_model_repository }}/snapshots/{{ model.revision }}"
+
+- name: Create model cache directories
   ansible.builtin.file:
-    path: "{{ llama_cache_root }}"
+    path: "{{ item }}"
     state: directory
     owner: "{{ inference.operational_user }}"
     group: "{{ inference.operational_user }}"
     mode: "0755"
+  loop:
+    - "{{ llama_cache_root }}"
+    - "{{ llama_model_repository }}/blobs"
+    - "{{ llama_snapshot_dir }}"
+
+- name: Report model acquisition start
+  ansible.builtin.debug:
+    msg: "Model acquisition started: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Acquire model and projector from AI Stores
+  ansible.builtin.get_url:
+    url: >-
+      {{ model.endpoint | regex_replace('/+$', '') }}/{{
+      model.hf_repo }}/revisions/{{ model.revision }}/{{ item.filename }}
+    dest: "{{ item.destination }}"
+    checksum: "sha256:{{ item.sha256 }}"
+    owner: "{{ inference.operational_user }}"
+    group: "{{ inference.operational_user }}"
+    mode: "0644"
+    timeout: 120
+  loop:
+    - filename: "{{ model.model_file }}"
+      destination: "{{ llama_model_blob }}"
+      sha256: "{{ model.model_checksum }}"
+    - filename: "{{ model.projector_file }}"
+      destination: "{{ llama_projector_blob }}"
+      sha256: "{{ model.projector_checksum }}"
+  loop_control:
+    label: "{{ item.filename }}"
+  register: llama_model_acquisition
+
+- name: Create model snapshot links
+  ansible.builtin.file:
+    src: "../../blobs/{{ item.sha256 }}"
+    dest: "{{ llama_snapshot_dir }}/{{ item.filename }}"
+    state: link
+    owner: "{{ inference.operational_user }}"
+    group: "{{ inference.operational_user }}"
+  loop:
+    - filename: "{{ model.model_file }}"
+      sha256: "{{ model.model_checksum }}"
+    - filename: "{{ model.projector_file }}"
+      sha256: "{{ model.projector_checksum }}"
+
+- name: Report model acquisition completion
+  ansible.builtin.debug:
+    msg: "Model acquisition completed: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"

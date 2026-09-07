@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+import argparse
+import datetime
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tarfile
+import tempfile
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--root", required=True)
+parser.add_argument("--commit", required=True)
+parser.add_argument("--configuration", required=True)
+args = parser.parse_args()
+
+root = Path(args.root).resolve()
+runtime = root / "runtime"
+source = root / "source"
+build = root / "build"
+
+def run(argv):
+    return subprocess.check_output(
+        argv, text=True, stderr=subprocess.STDOUT,
+        env={k: v for k, v in os.environ.items() if k != "LD_LIBRARY_PATH"},
+    ).strip()
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+server = runtime / "bin/llama-server"
+if not server.is_file():
+    raise SystemExit(f"Installed server missing: {server}")
+
+commit = run(["git", "-C", str(source), "rev-parse", "HEAD"])
+if commit != args.commit:
+    raise SystemExit(f"Source commit mismatch: {commit}")
+
+version = run([str(server), "--version"])
+if args.commit[:9] not in version:
+    raise SystemExit(f"Installed version mismatch: {version}")
+
+linked = run(["ldd", str(server)])
+if "not found" in linked:
+    raise SystemExit(f"Unresolved runtime libraries:\n{linked}")
+
+for line in linked.splitlines():
+    if "=>" not in line:
+        continue
+    name, target = line.split("=>", 1)
+    if name.strip().startswith(("libllama", "libggml", "libmtmd")):
+        resolved = Path(target.strip().split()[0]).resolve()
+        if not resolved.is_relative_to(runtime):
+            raise SystemExit(f"Library outside installed runtime: {line}")
+
+now = datetime.datetime.now(datetime.timezone.utc)
+capture_time = now.isoformat()
+artifacts = root / "artifacts"
+artifacts.mkdir(mode=0o755, exist_ok=True)
+capture = Path(tempfile.mkdtemp(
+    prefix=now.strftime("%Y%m%dT%H%M%SZ-"), dir=artifacts
+))
+capture.chmod(0o755)
+metadata = capture / "metadata"
+metadata.mkdir()
+
+# Record every installed file and symbolic link.
+def inventory():
+    entries = {}
+    for path in sorted(runtime.rglob("*")):
+        relative = path.relative_to(runtime).as_posix()
+        if path.is_symlink():
+            resolved = path.resolve(strict=True)
+            if not resolved.is_relative_to(runtime):
+                raise SystemExit(f"External runtime symbolic link: {path}")
+            entries[relative] = {
+                "type": "symlink",
+                "target": os.readlink(path),
+            }
+        elif path.is_file():
+            entries[relative] = {
+                "type": "file",
+                "size": path.stat().st_size,
+                "mode": oct(path.stat().st_mode & 0o7777),
+                "sha256": sha256(path),
+            }
+        elif not path.is_dir():
+            raise SystemExit(f"Unsupported installed entry: {path}")
+    return entries
+
+before = inventory()
+(metadata / "runtime-files.json").write_text(
+    json.dumps(before, indent=2) + "\n"
+)
+(metadata / "version.txt").write_text(version + "\n")
+(metadata / "linked-libraries.txt").write_text(linked + "\n")
+
+evidence_commands = {
+    "os-release.txt": ["cat", "/etc/os-release"],
+    "kernel.txt": ["uname", "-a"],
+    "cpu.txt": ["lscpu"],
+    "gpu.txt": [
+        "nvidia-smi",
+        "--query-gpu=name,compute_cap,driver_version",
+        "--format=csv,noheader",
+    ],
+    "installed-packages.tsv": [
+        "dpkg-query", "-W",
+        "-f=${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n",
+    ],
+    "cmake-version.txt": ["cmake", "--version"],
+    "gcc-version.txt": ["/usr/bin/gcc-13", "--version"],
+    "gxx-version.txt": ["/usr/bin/g++-13", "--version"],
+    "cuda-version.txt": ["/usr/bin/nvcc", "--version"],
+}
+for filename, command in evidence_commands.items():
+    (metadata / filename).write_text(run(command) + "\n")
+
+for path in [
+    build / "CMakeCache.txt",
+    build / "install_manifest.txt",
+    Path("/usr/local/sbin/ai-forge-build-llama"),
+]:
+    if not path.is_file():
+        raise SystemExit(f"Build evidence missing: {path}")
+    shutil.copy2(path, metadata / path.name)
+
+compiler_metadata = metadata / "cmake-compilers"
+compiler_metadata.mkdir()
+for path in (build / "CMakeFiles").glob("*/CMake*Compiler.cmake"):
+    shutil.copy2(path, compiler_metadata / f"{path.parent.name}-{path.name}")
+
+shutil.copy2(source / "LICENSE", metadata / "llama.cpp-LICENSE")
+
+provenance = {
+    "schema_version": 1,
+    "capture_id": capture.name,
+    "captured_at_utc": capture_time,
+    "configuration_id": args.configuration,
+    "source_commit": commit,
+    "source_upstream": "https://github.com/ggml-org/llama.cpp.git",
+    "source_commit_details": run([
+        "git", "-C", str(source), "show", "-s",
+        "--format=%H%n%cI%n%s", "HEAD",
+    ]),
+    "installed_version": version,
+    "original_install_prefix": str(runtime),
+    "ui_archive_sha256": sha256(root / "ui-dist.tar.gz"),
+    "validation": {
+        "installed_version": "passed",
+        "server_library_resolution": "passed",
+        "muse_vision_and_hermes": "pending",
+        "clean_buildless_deployment": "pending",
+    },
+    "package_evidence": (
+        "Full installed-package inventory; not a runtime dependency closure."
+    ),
+}
+(metadata / "provenance.json").write_text(
+    json.dumps(provenance, indent=2) + "\n"
+)
+
+archive = capture / "llama-runtime.tar.gz"
+with tarfile.open(archive, "w:gz", dereference=False) as tar:
+    tar.add(runtime, arcname="runtime")
+    tar.add(metadata, arcname="metadata")
+
+if inventory() != before:
+    archive.unlink()
+    raise SystemExit("Runtime changed during capture; rerun after the build finishes")
+
+checksum = sha256(archive)
+archive.chmod(0o644)
+(capture / "llama-runtime.tar.gz.sha256").write_text(
+    f"{checksum}  {archive.name}\n"
+)
+print(json.dumps({
+    "capture_id": capture.name,
+    "archive": str(archive),
+    "sha256": checksum,
+    "provenance": provenance,
+}))
