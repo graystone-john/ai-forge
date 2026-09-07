@@ -1,0 +1,16 @@
+{
+  "tests": [
+    {
+      "image": "images/robert-frost-road-not-taken.png",
+      "prompt": "Transcribe only the text visible in this image. Preserve line breaks. Mark unreadable text as [unreadable]. Do not fill in text from memory.",
+      "expected_content": [
+        [
+          "robert frost"
+        ],
+        [
+          "the road not taken"
+        ]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,171 @@
+---
+- name: Define Hermes image validation
+  ansible.builtin.set_fact:
+    hermes_vision_dataset: /var/lib/ai-forge/validation/hermes-vision/v1
+    hermes_vision_run: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%S%NZ') }}"
+    hermes_vision_tests:
+      - image: robert-frost-road-not-taken.png
+        prompt: >-
+          Transcribe only the text visible in the attached image.
+          Preserve line breaks. Do not fill in text from memory.
+          Answer directly without using tools.
+        expected: '(?is)(?=.*robert\s+frost)(?=.*the\s+road\s+not\s+taken)'
+      - image: soccer-ball.jpg
+        prompt: >-
+          Describe the objects, colors, patterns, and background visible
+          in the attached image. Answer directly without using tools.
+        expected: '(?i)(soccer\s+ball|football|match\s+ball)'
+      - image: aegis-combat-system.jpg
+        prompt: >-
+          List the visible diagram labels and describe the connections
+          shown between them. Distinguish visible connections from
+          inferred relationships. Answer directly without using tools.
+        expected: '(?is)(?=.*aegis)(?=.*command\s+and\s+decision)(?=.*weapon\s+control)'
+
+- name: Create Hermes image validation directory
+  ansible.builtin.file:
+    path: "{{ hermes_vision_dataset }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy Hermes test dataset from Athena
+  ansible.builtin.copy:
+    src: "{{ lookup('env', 'HOME') }}/graystone/test-data/hermes-vision/v1/"
+    dest: "{{ hermes_vision_dataset }}/"
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+
+- name: Verify test images as the Hermes user
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/sudo
+      - -H
+      - -u
+      - "{{ inference.operational_user }}"
+      - --
+      - /usr/bin/sha256sum
+      - -c
+      - SHA256SUMS
+    chdir: "{{ hermes_vision_dataset }}"
+  become: true
+  become_user: root
+  changed_when: false
+
+- name: Check installed Hermes command
+  ansible.builtin.stat:
+    path: /usr/local/bin/hermes
+  register: hermes_vision_binary
+
+- name: Require installed Hermes
+  ansible.builtin.assert:
+    that:
+      - hermes_vision_binary.stat.exists
+      - hermes_vision_binary.stat.executable | default(false)
+
+- name: Report Hermes image validation start
+  ansible.builtin.debug:
+    msg: "Hermes image validation started: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Test each image through installed Hermes
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/sudo
+      - -H
+      - -u
+      - "{{ inference.operational_user }}"
+      - --
+      - /usr/bin/env
+      - NO_COLOR=1
+      - /usr/bin/timeout
+      - --signal=TERM
+      - --kill-after=15s
+      - 300s
+      - /usr/local/bin/hermes
+      - chat
+      - --cli
+      - --quiet
+      - --oneshot
+      - --in
+      - "{{ inference.operational_home }}"
+      - --image
+      - "{{ hermes_vision_dataset }}/images/{{ item.image }}"
+      - --query
+      - "{{ item.prompt }}"
+      - --run-budget
+      - "240"
+      - --max-turns
+      - "2"
+    chdir: "{{ inference.operational_home }}"
+  become: true
+  become_user: root
+  environment:
+    HOME: "{{ inference.operational_home }}"
+    NO_COLOR: "1"
+  loop: "{{ hermes_vision_tests }}"
+  loop_control:
+    label: "{{ item.image }}"
+  register: hermes_vision_results
+  changed_when: true
+  failed_when: false
+
+- name: Define Athena Hermes results directory
+  ansible.builtin.set_fact:
+    hermes_vision_results_dir: >-
+      {{ lookup('env', 'HOME') }}/graystone/test-results/hermes-vision/v1/{{
+      model.id }}/{{ inventory_hostname }}
+
+- name: Create Hermes results directory on Athena
+  ansible.builtin.file:
+    path: "{{ hermes_vision_results_dir }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+
+- name: Save Hermes responses on Athena
+  ansible.builtin.copy:
+    dest: "{{ hermes_vision_results_dir }}/{{ hermes_vision_run }}.json"
+    mode: "0600"
+    content: "{{ hermes_vision_results.results | to_nice_json }}\n"
+  delegate_to: localhost
+  become: false
+
+- name: Report Hermes test results
+  ansible.builtin.debug:
+    msg:
+      - "Image: {{ item.item.image }}"
+      - "Exit code: {{ item.rc | default(-1) }}"
+      - "Started: {{ item.start | default('unavailable') }}"
+      - "Finished: {{ item.end | default('unavailable') }}"
+      - "Elapsed: {{ item.delta | default('unavailable') }}"
+      - >-
+        Expected content found: {{
+        (item.stdout | default('')) is search(item.item.expected) }}
+  loop: "{{ hermes_vision_results.results }}"
+  loop_control:
+    label: "{{ item.item.image }}"
+
+- name: Require successful Hermes image answers
+  ansible.builtin.assert:
+    that:
+      - item.rc | default(-1) == 0
+      - item.stdout | default('') | trim | length > 0
+      - (item.stdout | default('')) is search(item.item.expected)
+    fail_msg: >-
+      Hermes image test failed: {{ item.item.image }}.
+      Review {{ hermes_vision_results_dir }}/{{ hermes_vision_run }}.json
+    quiet: true
+  loop: "{{ hermes_vision_results.results }}"
+  loop_control:
+    label: "{{ item.item.image }}"
+
+- name: Report Hermes image validation completion
+  ansible.builtin.debug:
+    msg:
+      - "All three Hermes image tests passed."
+      - "Completed: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+      - "Results: {{ hermes_vision_results_dir }}/{{ hermes_vision_run }}.json"

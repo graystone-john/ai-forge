@@ -1,3 +1,6 @@
 ---
 - name: Validate coding node
   ansible.builtin.include_tasks: validate-coding-node.yaml
+
+- name: Validate image inference and expected content
+  ansible.builtin.include_tasks: validate-vision.yaml

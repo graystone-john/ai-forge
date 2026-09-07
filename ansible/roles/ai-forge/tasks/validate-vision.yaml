@@ -1,0 +1,127 @@
+---
+- name: Define vision validation paths
+  ansible.builtin.set_fact:
+    vision_dataset_local: "{{ lookup('env', 'HOME') }}/graystone/test-data/vision/v1"
+    vision_dataset_remote: /var/lib/ai-forge/validation/vision/v1
+    vision_run_id: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%S%NZ') }}"
+
+- name: Define vision report paths
+  ansible.builtin.set_fact:
+    vision_report_remote: "/var/lib/ai-forge/validation/vision/{{ vision_run_id }}.json"
+    vision_results_local: >-
+      {{ lookup('env', 'HOME') }}/graystone/test-results/vision/v1/{{
+      model.id }}/{{ llama_prebuilt.version }}/{{ inventory_hostname }}
+
+- name: Create target vision dataset directory
+  ansible.builtin.file:
+    path: "{{ vision_dataset_remote }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Copy vision dataset from Athena
+  ansible.builtin.copy:
+    src: "{{ vision_dataset_local }}/"
+    dest: "{{ vision_dataset_remote }}/"
+    owner: root
+    group: root
+    mode: preserve
+
+- name: Install vision validation runner
+  ansible.builtin.copy:
+    src: validate-vision
+    dest: /usr/local/sbin/ai-forge-validate-vision
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Read installed runtime artifact identity
+  ansible.builtin.slurp:
+    src: "{{ llama_prebuilt.root }}/deploy/installed-archive.sha256"
+  register: vision_installed_artifact
+
+- name: Require selected runtime artifact
+  ansible.builtin.assert:
+    that:
+      - >-
+        vision_installed_artifact.content | b64decode | trim ==
+        llama_prebuilt.archive_sha256
+
+- name: Read live inference executable
+  ansible.builtin.shell: |
+    set -euo pipefail
+    pid="$(systemctl show --property=MainPID --value {{ (inference.service_name ~ '.service') | quote }})"
+    test "$pid" -gt 1
+    readlink -f "/proc/$pid/exe"
+  args:
+    executable: /bin/bash
+  register: vision_live_executable
+  changed_when: false
+
+- name: Require deployed prebuilt server
+  ansible.builtin.assert:
+    that:
+      - >-
+        vision_live_executable.stdout | trim ==
+        llama_prebuilt.root ~ '/runtime/bin/llama-server'
+
+- name: Report vision validation start
+  ansible.builtin.debug:
+    msg: "Vision validation started: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+
+- name: Run Frost image test
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/ai-forge-validate-vision
+      - --dataset
+      - "{{ vision_dataset_remote }}"
+      - --endpoint
+      - "http://{{ inference.host }}:{{ inference.port }}"
+      - --model
+      - "{{ model.id }}"
+      - --runtime-sha256
+      - "{{ llama_prebuilt.archive_sha256 }}"
+      - --output
+      - "{{ vision_report_remote }}"
+  register: vision_validation
+  changed_when: true
+  failed_when: false
+
+- name: Check for saved vision report
+  ansible.builtin.stat:
+    path: "{{ vision_report_remote }}"
+  register: vision_report
+
+- name: Create results directory on Athena
+  ansible.builtin.file:
+    path: "{{ vision_results_local }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+
+- name: Preserve vision results on Athena
+  ansible.builtin.fetch:
+    src: "{{ vision_report_remote }}"
+    dest: "{{ vision_results_local }}/{{ vision_run_id }}.json"
+    flat: true
+  when: vision_report.stat.exists
+
+- name: Report vision validation completion
+  ansible.builtin.debug:
+    msg:
+      - "{{ vision_validation.stdout_lines | default([]) }}"
+      - "Elapsed: {{ vision_validation.delta | default('unavailable') }}"
+      - "Completed: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+      - "Results directory: {{ vision_results_local }}"
+
+- name: Require successful image responses and expected content
+  ansible.builtin.assert:
+    that:
+      - vision_validation.rc == 0
+      - vision_report.stat.exists
+    fail_msg: >-
+      Vision validation failed.
+      {{ vision_validation.stderr | default('') }}
+      Review the reported failures and saved results.

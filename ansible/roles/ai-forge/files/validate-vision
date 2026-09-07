@@ -1,0 +1,141 @@
+#!/usr/bin/python3
+import argparse
+import base64
+from datetime import datetime, timezone
+import hashlib
+import json
+import mimetypes
+from pathlib import Path
+import time
+import urllib.error
+import urllib.request
+
+parser = argparse.ArgumentParser()
+for name in ("dataset", "endpoint", "model", "runtime-sha256", "output"):
+    parser.add_argument("--" + name, required=True)
+args = parser.parse_args()
+
+dataset = Path(args.dataset).resolve()
+output = Path(args.output)
+spec = json.loads((dataset / "prompts.json").read_text())
+tests = spec["tests"]
+if not tests:
+    raise SystemExit("No vision tests configured")
+
+checksums = {}
+for line in (dataset / "SHA256SUMS").read_text().splitlines():
+    checksum, name = line.split(maxsplit=1)
+    checksums[name.lstrip("*")] = checksum
+
+for test in tests:
+    name = test["image"]
+    path = (dataset / name).resolve()
+    if not path.is_relative_to(dataset):
+        raise SystemExit("Image outside dataset: " + name)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if checksums.get(name) != digest:
+        raise SystemExit("Image checksum mismatch: " + name)
+    if mimetypes.guess_type(name)[0] not in ("image/png", "image/jpeg"):
+        raise SystemExit("Unsupported image: " + name)
+    groups = test.get("expected_content")
+    if not isinstance(groups, list) or not groups:
+        raise SystemExit("Missing content checks: " + name)
+    for group in groups:
+        if not isinstance(group, list) or not group:
+            raise SystemExit("Invalid content-check group: " + name)
+        if any(not isinstance(p, str) or not p.strip() for p in group):
+            raise SystemExit("Invalid expected phrase: " + name)
+
+report = {
+    "started_at_utc": datetime.now(timezone.utc).isoformat(),
+    "model": args.model,
+    "runtime_archive_sha256": args.runtime_sha256,
+    "endpoint": args.endpoint,
+    "prompts_sha256": hashlib.sha256(
+        (dataset / "prompts.json").read_bytes()
+    ).hexdigest(),
+    "scope": "Image API and phrase checks; detailed visual accuracy requires review.",
+    "tests": [],
+}
+
+def save():
+    output.write_text(json.dumps(report, indent=2) + "\n")
+
+def normalize(text):
+    return " ".join(text.casefold().split())
+
+save()
+
+for test in tests:
+    name = test["image"]
+    mime = mimetypes.guess_type(name)[0]
+    encoded = base64.b64encode((dataset / name).read_bytes()).decode()
+    entry = {
+        "image": name,
+        "image_sha256": checksums[name],
+        "prompt": test["prompt"],
+        "expected_content": test["expected_content"],
+        "api_passed": False,
+        "content_passed": False,
+    }
+    started = time.monotonic()
+    payload = {
+        "model": args.model,
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": test["prompt"]},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{encoded}"},
+                },
+            ],
+        }],
+        "temperature": 0,
+        "max_tokens": 4096,
+    }
+    request = urllib.request.Request(
+        args.endpoint.rstrip("/") + "/v1/chat/completions",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=300) as response:
+            result = json.load(response)
+        entry["response"] = result
+        choice = result["choices"][0]
+        content = choice["message"].get("content")
+        answer = content if isinstance(content, str) else ""
+        entry["api_passed"] = bool(answer.strip()) and (
+            choice.get("finish_reason") == "stop"
+        )
+        missing = [
+            group for group in test["expected_content"]
+            if not any(normalize(phrase) in normalize(answer) for phrase in group)
+        ]
+        entry["missing_content"] = missing
+        entry["content_passed"] = not missing
+        if not entry["api_passed"]:
+            entry["error"] = "Expected a nonempty answer with finish_reason=stop"
+        elif missing:
+            entry["error"] = "Missing expected content: " + json.dumps(missing)
+    except Exception as error:
+        entry["error"] = str(error)
+        if isinstance(error, urllib.error.HTTPError):
+            entry["error_body"] = error.read().decode(errors="replace")
+
+    entry["passed"] = entry["api_passed"] and entry["content_passed"]
+    entry["elapsed_seconds"] = round(time.monotonic() - started, 2)
+    report["tests"].append(entry)
+    save()
+    print(f"{'PASS' if entry['passed'] else 'FAIL'}: {name}", flush=True)
+    if not entry["passed"]:
+        print(entry.get("error", "Test failed"), flush=True)
+
+report["finished_at_utc"] = datetime.now(timezone.utc).isoformat()
+report["api_passed"] = all(t["api_passed"] for t in report["tests"])
+report["content_passed"] = all(t["content_passed"] for t in report["tests"])
+report["passed"] = all(t["passed"] for t in report["tests"])
+save()
+print("Report:", output)
+raise SystemExit(0 if report["passed"] else 1)
