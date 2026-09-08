@@ -30,6 +30,10 @@ def main():
     parser.add_argument("--tokens", type=positive, default=8192)
     parser.add_argument("--predict", type=positive, default=512)
     args = parser.parse_args()
+    if not __import__("re").fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_.-]*", args.machine
+    ):
+        parser.error("Invalid machine name")
 
     for script in ("performance-machine", "performance-inference"):
         if not (ROOT / "scripts" / script).is_file():
@@ -41,7 +45,7 @@ def main():
 
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_id = f"{stamp}-paired-{uuid.uuid4().hex[:8]}"
-    out = vault / "graystone/performance/v1/sessions" / run_id
+    out = vault / "graystone/performance/v1/sessions" / args.machine / run_id
     out.mkdir(parents=True, exist_ok=False)
 
     manifest = {

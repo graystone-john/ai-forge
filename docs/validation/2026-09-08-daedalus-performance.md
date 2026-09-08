@@ -300,7 +300,7 @@ This synthetic request is short and highly favorable to speculative
 draft acceptance. It is not a sustained-power or Hermes-speed benchmark.
 One-second samples cannot accurately resolve all generation-phase peaks.
 
-Session evidence: `/home/nispoe/graystone/ai-stores/vault/graystone/performance/v1/sessions/20260908T043235Z-paired-3f37ca09`
+Session evidence: `/home/nispoe/graystone/ai-stores/vault/graystone/performance/v1/sessions/daedalus-01/20260908T043235Z-paired-3f37ca09`
 
 ## Paired direct inference — 32768 tokens, 04:35 UTC
 
@@ -329,7 +329,7 @@ Session evidence: `/home/nispoe/graystone/ai-stores/vault/graystone/performance/
 Minimum available system RAM: 59590.414 MiB.
 
 Evidence:
-`~/graystone/ai-stores/vault/graystone/performance/v1/sessions/20260908T043449Z-paired-0841bddb/`
+`~/graystone/ai-stores/vault/graystone/performance/v1/sessions/daedalus-01/20260908T043449Z-paired-0841bddb/`
 
 One logical CPU was almost continuously busy, while most aggregate CPU capacity
 remained unused. This does not identify whether the busy thread is performing
@@ -385,7 +385,7 @@ Counter differences approximate workload boundaries. Shared thermal
 counters are not summed. Synthetic generation speed does not represent
 Hermes coding speed, and this is not yet a long-duration load test.
 
-Session evidence: `/home/nispoe/graystone/ai-stores/vault/graystone/performance/v1/sessions/20260908T043748Z-paired-170dc675`
+Session evidence: `/home/nispoe/graystone/ai-stores/vault/graystone/performance/v1/sessions/daedalus-01/20260908T043748Z-paired-170dc675`
 
 ## Paired direct inference — 122880 tokens, 04:41 UTC
 
@@ -432,7 +432,7 @@ observations, not a measured average or guaranteed maximum.
 This synthetic test verifies request capacity and execution, not
 long-context answer quality or minimum physical RAM requirements.
 
-Session evidence: `/home/nispoe/graystone/ai-stores/vault/graystone/performance/v1/sessions/20260908T044139Z-paired-601bc7e1`
+Session evidence: `/home/nispoe/graystone/ai-stores/vault/graystone/performance/v1/sessions/daedalus-01/20260908T044139Z-paired-601bc7e1`
 
 ## Checkpoint — testing paused pending logging plug
 
@@ -493,3 +493,20 @@ were exercised on Daedalus. This work did not perform a provisioning
 regression, establish minimum hardware requirements, or determine maximum
 electrical draw. Meter cadence, CPU package power, and shared-circuit capacity
 remain unverified.
+
+## Performance session storage by machine
+
+Performance sessions are now stored under:
+`vault/graystone/performance/v1/sessions/<machine-id>/<session-id>/`
+
+The primary identifier is the AI Forge machine ID, such as `daedalus-01`.
+Existing sessions were migrated using the machine field in each session.json.
+Results and workloads already use machine-specific directories.
+
+Existing session IDs and raw measurement contents are preserved. Absolute paths
+printed in historical console logs describe the original locations and are
+retained as historical evidence. Telemetry/workload paths in session manifests
+remain valid because those directories were not moved.
+
+This change organizes session storage; it does not add new hardware inventory
+or configuration measurements.
