@@ -1,0 +1,224 @@
+#!/usr/bin/env python3
+"""Coordinate telemetry and a bounded direct-inference workload."""
+import argparse
+import datetime
+import json
+from pathlib import Path
+import queue
+import signal
+import subprocess
+import threading
+import time
+import uuid
+
+ROOT = Path(__file__).resolve().parent.parent
+
+def positive(value):
+    n = int(value)
+    if n <= 0:
+        raise argparse.ArgumentTypeError("Must be positive")
+    return n
+
+def reader(stream, messages, name):
+    for line in stream:
+        messages.put((name, line))
+    messages.put((name, None))
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("machine")
+    parser.add_argument("--tokens", type=positive, default=8192)
+    parser.add_argument("--predict", type=positive, default=512)
+    args = parser.parse_args()
+
+    for script in ("performance-machine", "performance-inference"):
+        if not (ROOT / "scripts" / script).is_file():
+            parser.error(f"Missing scripts/{script}")
+
+    vault = ROOT.parent / "ai-stores/vault"
+    if not vault.is_dir():
+        parser.error("Existing AI Stores vault not found")
+
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run_id = f"{stamp}-paired-{uuid.uuid4().hex[:8]}"
+    out = vault / "graystone/performance/v1/sessions" / run_id
+    out.mkdir(parents=True, exist_ok=False)
+
+    manifest = {
+        "run_id": run_id,
+        "machine": args.machine,
+        "input_tokens": args.tokens,
+        "output_tokens": args.predict,
+        "warmup_idle_seconds": 10,
+        "recovery_seconds": 30,
+        "status": "starting",
+    }
+    manifest_path = out / "session.json"
+
+    def save():
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+    save()
+    (out / "wall-meter.csv").write_text(
+        "phase,watts,amps,notes\n"
+    )
+    print(f"SESSION: {out}", flush=True)
+    print("Keep other Hermes/inference requests idle during this test.", flush=True)
+
+    messages = queue.Queue()
+    processes = {}
+    closed = set()
+
+    def launch(name, argv):
+        process = subprocess.Popen(
+            argv, cwd=ROOT,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, start_new_session=True,
+        )
+        processes[name] = process
+        threading.Thread(
+            target=reader, args=(process.stdout, messages, name),
+            daemon=True,
+        ).start()
+        return process
+
+    def consume(log, timeout=0.2):
+        try:
+            name, line = messages.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        if line is None:
+            closed.add(name)
+            return None
+        log.write(f"[{name}] {line}")
+        log.flush()
+        print(f"[{name}] {line}", end="", flush=True)
+
+        if name == "telemetry" and line.startswith("Results: "):
+            manifest["telemetry_directory"] = line.split(": ", 1)[1].strip()
+            save()
+        if name == "workload" and line.startswith("Workload evidence: "):
+            manifest["workload_directory"] = line.split(": ", 1)[1].strip()
+            save()
+        return name, line
+
+    def stop(process):
+        if process.poll() is not None:
+            return
+        # Interrupt only the controller first, allowing it to save its summary.
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            import os
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+
+    try:
+        with (out / "console.log").open("w") as log:
+            telemetry = launch("telemetry", [
+                str(ROOT / "scripts/performance-machine"), args.machine,
+                "--stage", "heavy-inference",
+                "--seconds", "900",
+                "--notes",
+                f"Paired session {run_id}; input={args.tokens}; output={args.predict}",
+            ])
+
+            deadline = time.monotonic() + 60
+            ready = False
+            while time.monotonic() < deadline:
+                item = consume(log)
+                if item and item[0] == "telemetry" and "CAPTURE START:" in item[1]:
+                    ready = True
+                    break
+                if telemetry.poll() is not None:
+                    break
+            if not ready:
+                raise RuntimeError("Telemetry did not confirm capture start")
+
+            # Require actual saved samples before launching the workload.
+            capture = Path(manifest["telemetry_directory"])
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                consume(log)
+                if telemetry.poll() is not None:
+                    raise RuntimeError("Telemetry exited before workload")
+                raw = capture / "telemetry.jsonl"
+                if raw.exists():
+                    events = [
+                        json.loads(line)
+                        for line in raw.read_text().splitlines()
+                        if line.strip()
+                    ]
+                    if any(e.get("type") == "sample" for e in events):
+                        break
+            else:
+                raise RuntimeError("No telemetry samples saved")
+
+            print("\nBASELINE: recording 10 seconds before workload.", flush=True)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                consume(log)
+                if telemetry.poll() is not None:
+                    raise RuntimeError("Telemetry stopped during baseline")
+
+            manifest["status"] = "running"
+            save()
+            workload = launch("workload", [
+                str(ROOT / "scripts/performance-inference"), args.machine,
+                "--tokens", str(args.tokens),
+                "--predict", str(args.predict),
+            ])
+
+            deadline = time.monotonic() + 720
+            while workload.poll() is None or "workload" not in closed:
+                consume(log)
+                if telemetry.poll() is not None:
+                    raise RuntimeError("Telemetry stopped during workload")
+                if time.monotonic() > deadline:
+                    raise RuntimeError("Workload exceeded controller timeout")
+
+            manifest["workload_exit_code"] = workload.returncode
+            save()
+            print("\nRECOVERY: recording 30 seconds after workload.", flush=True)
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                consume(log)
+                if telemetry.poll() is not None:
+                    raise RuntimeError("Telemetry stopped during recovery")
+
+            stop(telemetry)
+            deadline = time.monotonic() + 5
+            while "telemetry" not in closed and time.monotonic() < deadline:
+                consume(log)
+
+            summary = json.loads((capture / "summary.json").read_text())
+            manifest["telemetry_samples"] = summary["samples"]
+            manifest["telemetry_status"] = summary["status"]
+            if summary["samples"] <= 0 or summary["status"] == "failed":
+                raise RuntimeError("Telemetry did not preserve a valid capture")
+            manifest["status"] = (
+                "completed" if workload.returncode == 0 else "workload_failed"
+            )
+    except KeyboardInterrupt:
+        manifest["status"] = "interrupted"
+    except Exception as exc:
+        manifest["status"] = "failed"
+        manifest["error"] = str(exc)
+        print(f"ERROR: {exc}", flush=True)
+    finally:
+        for process in reversed(list(processes.values())):
+            stop(process)
+        save()
+
+    print("\nSESSION RESULT")
+    print(json.dumps(manifest, indent=2))
+    print(f"Session evidence: {out}")
+    return 0 if manifest["status"] == "completed" else 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())

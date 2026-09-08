@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Fixed-size llama.cpp inference measurement launched from Athena."""
+import argparse
+import datetime
+import json
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import uuid
+import yaml
+
+ROOT = Path(__file__).resolve().parent.parent
+
+REMOTE = r'''
+import datetime
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
+
+def emit(kind, **values):
+    print(json.dumps(dict(type=kind, **values)), flush=True)
+
+def utc():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+def api(route, payload=None):
+    req = urllib.request.Request(
+        "http://127.0.0.1:8080" + route,
+        data=None if payload is None else json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=600) as response:
+        return json.load(response)
+
+try:
+    count, predict = map(int, sys.argv[1:])
+    props = api("/props")
+    emit("server", properties=props)
+    context = props["default_generation_settings"]["n_ctx"]
+    if count + predict + 16 > context:
+        raise ValueError("Requested tokens exceed the live context allowance")
+
+    corpus = "Synthetic power records for a capacity benchmark.\n"
+    corpus += "".join(
+        f"Record {i:06d}: elapsed_seconds={i*7}; "
+        f"watts={80+(i*37)%421}; sensor={i%32}; status=recorded.\n"
+        for i in range(count // 8 + 100)
+    )
+    tokens = api("/tokenize", {
+        "content": corpus, "add_special": True,
+    })["tokens"]
+    if len(tokens) < count or not all(isinstance(t, int) for t in tokens):
+        raise ValueError("Unexpected tokenizer output or insufficient tokens")
+
+    payload = {
+        "prompt": tokens[:count],
+        "n_predict": predict,
+        "temperature": 0,
+        "seed": 42,
+        "ignore_eos": True,
+        "cache_prompt": False,
+        "stream": False,
+    }
+    emit("fixture", corpus=corpus)
+    emit("request", payload=payload)
+    started = utc()
+    clock = time.monotonic()
+    emit("start", timestamp_utc=started)
+    response = api("/completion", payload)
+    elapsed = time.monotonic() - clock
+    ended = utc()
+    emit("response", response=response)
+
+    successful = (
+        not response.get("error")
+        and response.get("tokens_predicted") == predict
+        and not response.get("truncated", False)
+    )
+    emit(
+        "result",
+        status="completed" if successful else "incomplete",
+        started_utc=started,
+        ended_utc=ended,
+        elapsed_seconds=elapsed,
+        requested_input_tokens=count,
+        requested_output_tokens=predict,
+        tokens_evaluated=response.get("tokens_evaluated"),
+        tokens_predicted=response.get("tokens_predicted"),
+        timings=response.get("timings"),
+    )
+    raise SystemExit(0 if successful else 1)
+except Exception as exc:
+    message = str(exc)
+    if isinstance(exc, urllib.error.HTTPError):
+        message += "\n" + exc.read().decode(errors="replace")[:4000]
+    emit("error", timestamp_utc=utc(), message=message)
+    raise SystemExit(1)
+'''
+
+def positive(value):
+    n = int(value)
+    if n <= 0:
+        raise argparse.ArgumentTypeError("Must be positive")
+    return n
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("machine")
+    parser.add_argument("--tokens", type=positive, default=8192)
+    parser.add_argument("--predict", type=positive, default=512)
+    args = parser.parse_args()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", args.machine):
+        parser.error("Invalid machine name")
+
+    config = yaml.safe_load(
+        (ROOT / "machines" / args.machine / "machine.yaml").read_text()
+    )
+    ip = config.get("network", {}).get("provisioning_ip")
+    if not ip:
+        parser.error("Missing provisioning_ip")
+    subprocess.run(
+        [str(ROOT / "scripts/check-machine"), args.machine], check=True
+    )
+
+    vault = ROOT.parent / "ai-stores/vault"
+    if not vault.is_dir():
+        parser.error("Existing AI Stores vault not found")
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out = vault / "graystone/performance/v1/workloads" / args.machine / (
+        f"{stamp}-inference-{args.tokens}-{uuid.uuid4().hex[:8]}"
+    )
+    out.mkdir(parents=True, exist_ok=False)
+    (out / "controller.py").write_text(Path(__file__).read_text())
+    (out / "runner.py").write_text(REMOTE)
+
+    remote_command = shlex.join([
+        "timeout", "--signal=TERM", "--kill-after=15s", "660s",
+        "python3", "-u", "-", str(args.tokens), str(args.predict),
+    ])
+    argv = [
+        "ssh", "-T",
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", "ConnectTimeout=5",
+        "-o", "ServerAliveInterval=5",
+        "-o", "ServerAliveCountMax=3",
+        "-o", f"UserKnownHostsFile={Path.home() / '.ssh/known_hosts'}",
+        "-i", str(ROOT / "secrets/ssh/id_ed25519_ai_forge"),
+        f"nispoe@{ip}", remote_command,
+    ]
+    print(f"Workload evidence: {out}", flush=True)
+    process = None
+    result = None
+    rc = None
+    try:
+        with (out / "ssh.stderr.log").open("w") as errors:
+            process = subprocess.Popen(
+                argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=errors, text=True,
+            )
+            process.stdin.write(REMOTE)
+            process.stdin.close()
+            with (out / "events.jsonl").open("w") as events:
+                for line in process.stdout:
+                    events.write(line)
+                    events.flush()
+                    event = json.loads(line)
+                    kind = event["type"]
+                    if kind in {
+                        "server", "fixture", "request", "response",
+                        "start", "result", "error",
+                    }:
+                        (out / f"{kind}.json").write_text(
+                            json.dumps(event, indent=2) + "\n"
+                        )
+                    if kind in {"start", "result", "error"}:
+                        print(json.dumps(event, indent=2), flush=True)
+                    else:
+                        print(f"Saved {kind}", flush=True)
+                    if kind == "result":
+                        result = event
+            rc = process.wait()
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        success = rc == 0 and result is not None and result["status"] == "completed"
+        (out / "transport.json").write_text(json.dumps({
+            "ssh_exit_code": rc,
+            "status": "completed" if success else "incomplete",
+        }, indent=2) + "\n")
+        print(f"Evidence: {out}", flush=True)
+    return 0 if success else 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())

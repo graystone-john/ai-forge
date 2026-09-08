@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Run a bounded Hermes coding workload using interactive management sudo."""
+import datetime
+import json
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+import uuid
+import yaml
+
+ROOT = Path(__file__).resolve().parent.parent
+PROMPT = """Work only inside the current disposable directory.
+Use Python's standard library; do not install packages or access the network.
+Create power_report.py with a command-line interface accepting an input CSV
+with columns elapsed_seconds,watts. Require at least two rows, finite
+nonnegative values, and strictly increasing elapsed_seconds. Calculate the
+minimum, maximum, time-weighted average watts, and watt-hours using trapezoidal
+integration over the observed duration. Print the results as JSON.
+Create test_power_report.py using unittest. Test constant power, an irregularly
+spaced ramp, duplicate timestamps, negative power, nonfinite values, and too few
+rows. Run the tests using your terminal tool, fix any failures, and finish with
+a concise account of the files created and actual test results.
+Do not change files outside this directory or alter system configuration.
+"""
+
+REMOTE = r'''
+import datetime
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+prompt = PROMPT_VALUE
+work = Path(tempfile.mkdtemp(prefix="hermes-performance-"))
+os.chdir(work)
+(work / "prompt.txt").write_text(prompt)
+print("WORKLOAD_START_UTC=" + datetime.datetime.now(datetime.timezone.utc).isoformat(), flush=True)
+print("WORKSPACE=" + str(work), flush=True)
+argv = [
+    "/usr/bin/timeout", "--foreground", "--signal=TERM", "--kill-after=15s", "300s",
+    "/usr/local/bin/hermes", "chat", "--cli", "--oneshot",
+    "--in", str(work), "--query-file", str(work / "prompt.txt"),
+    "--run-budget", "240", "--max-turns", "12",
+]
+print("COMMAND=" + json.dumps(argv), flush=True)
+result = subprocess.run(argv, env=dict(os.environ, NO_COLOR="1"))
+print("HERMES_EXIT_CODE=" + str(result.returncode), flush=True)
+
+# Independently rerun generated tests; creation and execution must be visible.
+if (work / "test_power_report.py").is_file():
+    check = subprocess.run([
+        "/usr/bin/timeout", "--kill-after=5s", "30s",
+        "/usr/bin/python3", "-m", "unittest", "-v", "test_power_report",
+    ])
+    print("INDEPENDENT_TEST_EXIT_CODE=" + str(check.returncode), flush=True)
+else:
+    check = None
+    print("INDEPENDENT_TEST_EXIT_CODE=missing_test_file", flush=True)
+
+print("WORKLOAD_END_UTC=" + datetime.datetime.now(datetime.timezone.utc).isoformat(), flush=True)
+raise SystemExit(
+    0 if result.returncode == 0 and check is not None
+    and check.returncode == 0 and (work / "power_report.py").is_file() else 1
+)
+'''
+
+def main():
+    if len(sys.argv) != 2 or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_.-]*", sys.argv[1]
+    ):
+        raise SystemExit("Usage: scripts/performance-hermes <machine>")
+    machine = sys.argv[1]
+    config = yaml.safe_load(
+        (ROOT / "machines" / machine / "machine.yaml").read_text()
+    )
+    ip = config.get("network", {}).get("provisioning_ip")
+    if not ip:
+        raise SystemExit("Missing provisioning_ip")
+    # This first workload uses Daedalus's verified operational identity.
+    if machine != "daedalus-01":
+        raise SystemExit("This v1 workload currently supports daedalus-01 only")
+    subprocess.run(
+        [str(ROOT / "scripts/check-machine"), machine], check=True
+    )
+    vault = ROOT.parent / "ai-stores/vault"
+    if not vault.is_dir():
+        raise SystemExit("Existing AI Stores vault not found")
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out = vault / "graystone/performance/v1/workloads" / machine / (
+        stamp + "-hermes-" + uuid.uuid4().hex[:8]
+    )
+    out.mkdir(parents=True, exist_ok=False)
+    (out / "prompt.txt").write_text(PROMPT)
+    source = REMOTE.replace("PROMPT_VALUE", repr(PROMPT), 1)
+    (out / "runner.py").write_text(source)
+    command = shlex.join([
+        "sudo", "-H", "-u", "daedalus", "--",
+        "/usr/bin/python3", "-u", "-c", source,
+    ])
+    argv = [
+        "ssh", "-t", "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", "ConnectTimeout=5",
+        "-o", "ServerAliveInterval=5",
+        "-o", "ServerAliveCountMax=3",
+        "-o", f"UserKnownHostsFile={Path.home() / '.ssh/known_hosts'}",
+        "-i", str(ROOT / "secrets/ssh/id_ed25519_ai_forge"),
+        f"nispoe@{ip}", command,
+    ]
+    print(f"Workload evidence: {out}", flush=True)
+    print("Enter the target sudo password when prompted.", flush=True)
+    # SSH retains terminal stdin for sudo and normal Hermes approval prompts.
+    with (out / "console.log").open("w") as log:
+        process = subprocess.Popen(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+        )
+        while True:
+            char = process.stdout.read(1)
+            if not char:
+                break
+            sys.stdout.write("\r\n" if char == "\n" else char)
+            sys.stdout.flush()
+            log.write(char)
+            log.flush()
+        rc = process.wait()
+    (out / "result.json").write_text(json.dumps({
+        "machine": machine, "exit_code": rc,
+        "finished_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "note": "Generated project remains in the printed target workspace. "
+                "Passing generated tests is not an independent correctness certification."
+    }, indent=2) + "\n")
+    print(f"\nWorkload exit code: {rc}\nEvidence: {out}")
+    return rc
+
+if __name__ == "__main__":
+    raise SystemExit(main())

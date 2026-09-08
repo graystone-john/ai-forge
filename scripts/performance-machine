@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+"""Capture target telemetry through AI Forge's existing management SSH path."""
+import argparse
+import datetime
+import hashlib
+import json
+import math
+from pathlib import Path
+import re
+import shlex
+import signal
+import subprocess
+import sys
+import time
+import uuid
+
+import yaml
+
+ROOT = Path(__file__).resolve().parent.parent
+
+# Sent over SSH stdin; no collector file is installed on the target.
+COLLECTOR = r'''
+import csv
+import datetime
+import json
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import time
+
+def emit(kind, **values):
+    print(json.dumps(dict(type=kind, **values)), flush=True)
+
+def utc():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+def run(argv):
+    try:
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=4)
+        return dict(rc=p.returncode, stdout=p.stdout, stderr=p.stderr)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return dict(rc=None, stdout="", stderr=str(e))
+
+def cpu():
+    v = list(map(int, Path("/proc/stat").read_text().splitlines()[0].split()[1:]))
+    return sum(v[:8]), v[3] + v[4]
+
+def memory():
+    m = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        key, value = line.split(":", 1)
+        m[key] = int(value.split()[0]) / 1024
+    return dict(
+        ram_total_mib=m["MemTotal"],
+        ram_used_mib=m["MemTotal"] - m["MemAvailable"],
+        ram_available_mib=m["MemAvailable"],
+        swap_used_mib=m["SwapTotal"] - m["SwapFree"],
+    )
+
+
+# Extended CPU and memory capacity metrics
+capacity_previous = {}
+capacity_origins = {}
+
+def capacity_number(path, scale=1):
+    try:
+        return float(path.read_text().strip()) / scale
+    except (OSError, ValueError):
+        return None
+
+def capacity_delta(key, value):
+    if value is None:
+        return None
+    capacity_origins.setdefault(key, value)
+    delta = value - capacity_origins[key]
+    return delta if delta >= 0 else None
+
+def capacity():
+    global capacity_previous
+    values = {}
+    current = {}
+
+    for line in Path("/proc/stat").read_text().splitlines():
+        parts = line.split()
+        if not parts[0].startswith("cpu") or not parts[0][3:].isdigit():
+            continue
+        name = parts[0]
+        ticks = list(map(int, parts[1:]))
+        current[name] = (sum(ticks[:8]), ticks[3] + ticks[4])
+        old = capacity_previous.get(name)
+        busy = None
+        if old is not None:
+            total = current[name][0] - old[0]
+            idle = current[name][1] - old[1]
+            if total > 0 and 0 <= idle <= total:
+                busy = 100 * (1 - idle / total)
+        values[name + "_busy_pct"] = busy
+    capacity_previous = current
+
+    busy = [v for v in values.values() if v is not None]
+    values["busiest_logical_cpu_pct"] = max(busy) if busy else None
+
+    for device in sorted(Path("/sys/class/hwmon").glob("hwmon*")):
+        try:
+            name = (device / "name").read_text().strip()
+        except OSError:
+            continue
+        if name != "coretemp":
+            continue
+        for sensor in sorted(device.glob("temp*_input")):
+            label_path = sensor.with_name(
+                sensor.name.replace("_input", "_label")
+            )
+            try:
+                label = label_path.read_text().strip()
+            except OSError:
+                label = sensor.stem
+            label = label.lower().replace(" ", "_")
+            key = f"cpu_temp_{device.name}_{label}_c"
+            values[key] = capacity_number(sensor, 1000)
+
+    root = Path("/sys/devices/system/cpu")
+    for policy in sorted((root / "cpufreq").glob("policy*")):
+        values[f"cpu_freq_{policy.name}_mhz"] = capacity_number(
+            policy / "scaling_cur_freq", 1000
+        )
+
+    for cpu_dir in sorted(root.glob("cpu[0-9]*")):
+        for counter in sorted(
+            (cpu_dir / "thermal_throttle").glob("*throttle_count")
+        ):
+            key = f"{cpu_dir.name}_{counter.name}"
+            values[key + "_since_start"] = capacity_delta(
+                key, capacity_number(counter)
+            )
+
+    mem = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        key, raw = line.split(":", 1)
+        mem[key] = int(raw.split()[0]) / 1024
+    for source, key in {
+        "Cached": "ram_cached_mib",
+        "AnonPages": "ram_anon_mib",
+        "SReclaimable": "ram_reclaimable_slab_mib",
+        "Shmem": "ram_shmem_mib",
+        "Mlocked": "ram_mlocked_mib",
+        "Unevictable": "ram_unevictable_mib",
+    }.items():
+        values[key] = mem.get(source)
+
+    vm = dict(
+        line.split()
+        for line in Path("/proc/vmstat").read_text().splitlines()
+    )
+    for key in ("pswpin", "pswpout", "pgmajfault", "oom_kill"):
+        value = float(vm[key]) if key in vm else None
+        values[key + "_since_start"] = capacity_delta(key, value)
+
+    for resource in ("cpu", "memory", "io"):
+        try:
+            lines = Path("/proc/pressure", resource).read_text().splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            parts = line.split()
+            fields = dict(item.split("=") for item in parts[1:])
+            prefix = f"psi_{resource}_{parts[0]}"
+            values[prefix + "_avg10_pct"] = float(fields["avg10"])
+            values[prefix + "_stall_us_since_start"] = capacity_delta(
+                prefix, float(fields["total"])
+            )
+    return values
+
+seconds, interval = map(float, sys.argv[1:])
+service = run([
+    "systemctl", "show", "ai-forge-inference.service",
+    "-p", "ActiveState", "-p", "MainPID",
+])
+pid = next((x.split("=", 1)[1] for x in service["stdout"].splitlines()
+            if x.startswith("MainPID=")), "0")
+try:
+    executable = str(Path("/proc", pid, "exe").resolve(strict=True))
+except OSError:
+    executable = None
+
+emit(
+    "metadata", host=socket.gethostname(), timestamp_utc=utc(),
+    kernel=run(["uname", "-r"]),
+    cpu=run(["lscpu"]),
+    gpu=run(["nvidia-smi"]),
+    inference_service=service,
+    inference_executable=executable,
+)
+query = [
+    "uuid", "power.draw", "power.limit", "utilization.gpu",
+    "memory.used", "memory.total", "temperature.gpu",
+]
+keys = [
+    "power_w", "power_limit_w", "utilization_pct",
+    "vram_used_mib", "vram_total_mib", "temperature_c",
+]
+capacity()  # Initialize counter and per-CPU baselines.
+previous = cpu()
+start = time.monotonic()
+emit("start", timestamp_utc=utc())
+count = 0
+
+while True:
+    target = min(start + (count + 1) * interval, start + seconds)
+    time.sleep(max(0, target - time.monotonic()))
+    elapsed = time.monotonic() - start
+    timestamp = utc()
+    current = cpu()
+    delta = current[0] - previous[0]
+    busy = 100 * (1 - (current[1] - previous[1]) / delta) if delta > 0 else None
+    previous = current
+    host = dict(cpu_busy_pct=busy, **memory())
+    host.update(capacity())
+
+    result = run([
+        "nvidia-smi", "--query-gpu=" + ",".join(query),
+        "--format=csv,noheader,nounits",
+    ])
+    gpus = []
+    error = result["stderr"] if result["rc"] != 0 else None
+    if result["rc"] == 0:
+        for parts in csv.reader(result["stdout"].splitlines()):
+            if len(parts) != len(query):
+                error = "Unexpected GPU column count"
+                continue
+            gpu = dict(uuid=parts[0].strip())
+            for key, value in zip(keys, parts[1:]):
+                try:
+                    n = float(value)
+                    gpu[key] = n if float("-inf") < n < float("inf") else None
+                except ValueError:
+                    gpu[key] = None
+            gpus.append(gpu)
+
+    emit("sample", timestamp_utc=timestamp, elapsed_seconds=elapsed,
+         host=host, gpus=gpus, gpu_error=error)
+    count += 1
+    if time.monotonic() - start >= seconds:
+        break
+
+emit("end", timestamp_utc=utc(), samples=count,
+     actual_seconds=time.monotonic() - start)
+'''
+
+def positive(value):
+    n = float(value)
+    if not math.isfinite(n) or n <= 0:
+        raise argparse.ArgumentTypeError("Must be positive and finite")
+    return n
+
+def git(*args, directory=ROOT):
+    p = subprocess.run(
+        ["git", "-C", str(directory), *args],
+        capture_output=True, text=True,
+    )
+    return dict(rc=p.returncode, output=p.stdout.strip(), error=p.stderr.strip())
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("machine")
+    parser.add_argument("--stage", required=True,
+                        choices=["idle", "hermes", "heavy-inference", "recovery"])
+    parser.add_argument("--seconds", type=positive, default=600)
+    parser.add_argument("--interval", type=positive, default=1)
+    parser.add_argument("--notes", default="",
+                        help="Model/context, workload, cache state, meter; no secrets")
+    args = parser.parse_args()
+
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", args.machine):
+        parser.error("Invalid machine name")
+    machine_file = ROOT / "machines" / args.machine / "machine.yaml"
+    if not machine_file.is_file():
+        parser.error(f"Unknown machine: {args.machine}")
+    machine = yaml.safe_load(machine_file.read_text())
+    ip = machine.get("network", {}).get("provisioning_ip")
+    if not ip:
+        parser.error("Machine has no provisioning_ip")
+    stores = ROOT.parent / "ai-stores"
+    if not (stores / "vault").is_dir():
+        parser.error(f"Expected existing AI Stores vault: {stores / 'vault'}")
+
+    ready = subprocess.run([str(ROOT / "scripts/check-machine"), args.machine])
+    if ready.returncode:
+        return ready.returncode
+
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out = (stores / "vault/graystone/performance/v1/results" /
+           args.machine / f"{stamp}-{args.stage}-{uuid.uuid4().hex[:8]}")
+    out.mkdir(parents=True, exist_ok=False)
+
+    manifest = dict(
+        machine=args.machine, provisioning_ip=ip, stage=args.stage,
+        requested_seconds=args.seconds, interval_seconds=args.interval,
+        notes=args.notes,
+        ai_forge_commit=git("rev-parse", "HEAD"),
+        ai_forge_status=git("status", "--short"),
+        ai_stores_commit=git("rev-parse", "HEAD", directory=stores),
+        ai_stores_status=git("status", "--short", directory=stores),
+        recorder_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+    )
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (out / "wall-meter.csv").write_text(
+        "timestamp_utc,elapsed_seconds,watts,amps,volts,power_factor,"
+        "cumulative_kwh,meter_peak_watts,meter_peak_amps,notes\n"
+    )
+
+    argv = [
+        "ssh", "-T",
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=5",
+        "-o", "ServerAliveInterval=5",
+        "-o", "ServerAliveCountMax=3",
+        "-o", "StrictHostKeyChecking=yes",
+        "-o", f"UserKnownHostsFile={Path.home() / '.ssh/known_hosts'}",
+        "-i", str(ROOT / "secrets/ssh/id_ed25519_ai_forge"),
+        f"nispoe@{ip}",
+        shlex.join(["python3", "-u", "-", str(args.seconds), str(args.interval)]),
+    ]
+    statistics = {}
+    def accumulate(group, values):
+        for key, value in values.items():
+            if not isinstance(value, (int, float)):
+                continue
+            s = statistics.setdefault(group, {}).setdefault(
+                key, dict(count=0, sum=0, min=value, max=value))
+            s["count"] += 1
+            s["sum"] += value
+            s["min"] = min(s["min"], value)
+            s["max"] = max(s["max"], value)
+
+    status = "failed"
+    count = 0
+    missing_gpu_samples = 0
+    end = None
+    process = None
+    print(f"\nResults: {out}", flush=True)
+    try:
+        with (out / "ssh.stderr.log").open("w") as errors, \
+             (out / "telemetry.jsonl").open("w") as raw:
+            process = subprocess.Popen(
+                argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=errors, text=True,
+            )
+            process.stdin.write(COLLECTOR)
+            process.stdin.close()
+            for line in process.stdout:
+                raw.write(line)
+                raw.flush()
+                event = json.loads(line)
+                if event["type"] == "start":
+                    print(f"CAPTURE START: {event['timestamp_utc']}", flush=True)
+                    print("Note/reset the wall meter now.", flush=True)
+                elif event["type"] == "sample":
+                    count += 1
+                    accumulate("host", event["host"])
+                    for gpu in event["gpus"]:
+                        accumulate(gpu["uuid"], gpu)
+                    if event["gpu_error"] or not event["gpus"]:
+                        missing_gpu_samples += 1
+                    if count == 1 or count % max(1, round(30 / args.interval)) == 0:
+                        print(
+                            f"{event['elapsed_seconds']:.0f}s | "
+                            f"RAM {event['host']['ram_used_mib']/1024:.2f} GiB | "
+                            f"GPU watts {[g['power_w'] for g in event['gpus']]}",
+                            flush=True,
+                        )
+                elif event["type"] == "end":
+                    end = event
+            rc = process.wait()
+            if rc == 0 and end and count == end["samples"] and count > 0:
+                status = "completed"
+    except KeyboardInterrupt:
+        status = "interrupted"
+    except Exception as exc:
+        print(f"Capture error: {exc}", file=sys.stderr)
+    finally:
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        for group in statistics.values():
+            for s in group.values():
+                s["mean"] = s.pop("sum") / s["count"]
+        summary = dict(
+            status=status, samples=count, end=end,
+            missing_gpu_samples=missing_gpu_samples,
+            statistics=statistics,
+            definitions={
+                "ram_used": "MemTotal minus MemAvailable, whole host",
+                "cpu_busy": "Aggregate busy percentage excluding idle and iowait",
+                "mean": "Arithmetic sample mean, not integrated energy",
+                "missing": "Unavailable sensor values are null, not zero",
+                "wall_power": "Manual meter readings only",
+                "peak": "Observed sample maximum, not a guaranteed transient maximum",
+            },
+        )
+        (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+        print(f"\n{status}: {count} samples")
+        print(f"GPU missing/error samples: {missing_gpu_samples}")
+        print(f"Summary: {out / 'summary.json'}")
+    return 0 if status == "completed" else 1
+
+if __name__ == "__main__":
+    raise SystemExit(main())
