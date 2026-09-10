@@ -26,7 +26,7 @@ Do not change files outside this directory or alter system configuration.
 """
 
 REMOTE = r'''
-import datetime
+import datetime as datetime
 import json
 import os
 from pathlib import Path
@@ -68,6 +68,9 @@ raise SystemExit(
 '''
 
 def main():
+    non_interactive = "--non-interactive" in sys.argv[1:]
+    if non_interactive:
+        sys.argv.remove("--non-interactive")
     if len(sys.argv) != 2 or not re.fullmatch(
         r"[A-Za-z0-9][A-Za-z0-9_.-]*", sys.argv[1]
     ):
@@ -95,37 +98,61 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     (out / "prompt.txt").write_text(PROMPT)
     source = REMOTE.replace("PROMPT_VALUE", repr(PROMPT), 1)
+    if non_interactive:
+        source = source.replace(
+            '"chat", "--cli", "--oneshot",',
+            '"chat", "--cli", "--oneshot", "--quiet",', 1)
+
     (out / "runner.py").write_text(source)
     command = shlex.join([
-        "sudo", "-H", "-u", "daedalus", "--",
+        "sudo", *(["-n"] if non_interactive else []),
+        "-H", "-u", "daedalus", "--",
         "/usr/bin/python3", "-u", "-c", source,
     ])
     argv = [
-        "ssh", "-t", "-o", "BatchMode=yes",
+        "ssh", "-T" if non_interactive else "-t",
+        "-o", "BatchMode=yes",
         "-o", "StrictHostKeyChecking=yes",
         "-o", "ConnectTimeout=5",
         "-o", "ServerAliveInterval=5",
         "-o", "ServerAliveCountMax=3",
         "-o", f"UserKnownHostsFile={Path.home() / '.ssh/known_hosts'}",
         "-i", str(ROOT / "secrets/ssh/id_ed25519_ai_forge"),
-        f"nispoe@{ip}", command,
+        f"{yaml.safe_load((ROOT / 'config/forge.yaml').read_text())['defaults']['username']}@{ip}", command,
     ]
     print(f"Workload evidence: {out}", flush=True)
-    print("Enter the target sudo password when prompted.", flush=True)
+    print(
+        "Noninteractive sudo; missing permission will fail immediately."
+        if non_interactive else
+        "Enter the target sudo password when prompted.",
+        flush=True,
+    )
     # SSH retains terminal stdin for sudo and normal Hermes approval prompts.
     with (out / "console.log").open("w") as log:
         process = subprocess.Popen(
-            argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            stdin=subprocess.DEVNULL if non_interactive else None,
         )
-        while True:
-            char = process.stdout.read(1)
-            if not char:
-                break
-            sys.stdout.write("\r\n" if char == "\n" else char)
-            sys.stdout.flush()
-            log.write(char)
-            log.flush()
-        rc = process.wait()
+        try:
+            while True:
+                char = process.stdout.read(1)
+                if not char:
+                    break
+                sys.stdout.write("\r\n" if char == "\n" else char)
+                sys.stdout.flush()
+                log.write(char)
+                log.flush()
+            rc = process.wait()
+        except KeyboardInterrupt:
+            rc = 130
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
     (out / "result.json").write_text(json.dumps({
         "machine": machine, "exit_code": rc,
         "finished_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),

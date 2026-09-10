@@ -510,3 +510,15 @@ remain valid because those directories were not moved.
 
 This change organizes session storage; it does not add new hardware inventory
 or configuration measurements.
+
+## September 9 automated wall-power follow-up
+
+See [September 9 Shelly measurements](2026-09-09-daedalus-shelly-power.md)
+for timestamped wall-power measurements and recorder changes.
+
+This September 8 report remains historical CPU/RAM/GPU and workload evidence.
+Its manual wall readings are individual observations, not measured averages
+or guaranteed maxima. In particular, the 8K readings of 124 W and 191 W
+do not establish loaded consumption; a later automated 8K test observed
+494.5 W. Configuration and measurement differences must be considered
+when comparing dates.

@@ -149,7 +149,7 @@ def main():
         "-o", "ServerAliveCountMax=3",
         "-o", f"UserKnownHostsFile={Path.home() / '.ssh/known_hosts'}",
         "-i", str(ROOT / "secrets/ssh/id_ed25519_ai_forge"),
-        f"nispoe@{ip}", remote_command,
+        f"{yaml.safe_load((ROOT / 'config/forge.yaml').read_text())['defaults']['username']}@{ip}", remote_command,
     ]
     print(f"Workload evidence: {out}", flush=True)
     process = None

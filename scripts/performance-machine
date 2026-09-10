@@ -15,6 +15,7 @@ import time
 import uuid
 
 import yaml
+from performance_shelly import ShellyRecorder
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -270,7 +271,11 @@ def main():
     parser.add_argument("--interval", type=positive, default=1)
     parser.add_argument("--notes", default="",
                         help="Model/context, workload, cache state, meter; no secrets")
+    parser.add_argument("--shelly", help="Shelly local IPv4 address")
     args = parser.parse_args()
+    if args.shelly:
+        import ipaddress
+        args.shelly = str(ipaddress.IPv4Address(args.shelly))
 
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", args.machine):
         parser.error("Invalid machine name")
@@ -298,6 +303,10 @@ def main():
         machine=args.machine, provisioning_ip=ip, stage=args.stage,
         requested_seconds=args.seconds, interval_seconds=args.interval,
         notes=args.notes,
+        shelly_address=args.shelly,
+        shelly_recorder_sha256=(hashlib.sha256(
+            (ROOT / "scripts/performance_shelly.py").read_bytes()
+        ).hexdigest() if args.shelly else None),
         ai_forge_commit=git("rev-parse", "HEAD"),
         ai_forge_status=git("status", "--short"),
         ai_stores_commit=git("rev-parse", "HEAD", directory=stores),
@@ -319,7 +328,7 @@ def main():
         "-o", "StrictHostKeyChecking=yes",
         "-o", f"UserKnownHostsFile={Path.home() / '.ssh/known_hosts'}",
         "-i", str(ROOT / "secrets/ssh/id_ed25519_ai_forge"),
-        f"nispoe@{ip}",
+        f"{yaml.safe_load((ROOT / 'config/forge.yaml').read_text())['defaults']['username']}@{ip}",
         shlex.join(["python3", "-u", "-", str(args.seconds), str(args.interval)]),
     ]
     statistics = {}
@@ -339,8 +348,14 @@ def main():
     missing_gpu_samples = 0
     end = None
     process = None
+    shelly = None
+    shelly_summary = None
     print(f"\nResults: {out}", flush=True)
     try:
+        if args.shelly:
+            shelly = ShellyRecorder(args.shelly, out)
+            shelly.start()
+            print(f"Shelly recording: {args.shelly}", flush=True)
         with (out / "ssh.stderr.log").open("w") as errors, \
              (out / "telemetry.jsonl").open("w") as raw:
             process = subprocess.Popen(
@@ -355,7 +370,12 @@ def main():
                 event = json.loads(line)
                 if event["type"] == "start":
                     print(f"CAPTURE START: {event['timestamp_utc']}", flush=True)
-                    print("Note/reset the wall meter now.", flush=True)
+                    print(
+                        "Shelly recording automatically; leave its energy counter unchanged."
+                        if args.shelly else
+                        "Record the wall meter reading and time for this capture.",
+                        flush=True,
+                    )
                 elif event["type"] == "sample":
                     count += 1
                     accumulate("host", event["host"])
@@ -387,6 +407,12 @@ def main():
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
+        if shelly is not None:
+            shelly_summary = shelly.stop()
+            print("Shelly: " + json.dumps(shelly_summary["power_w"]))
+            print(f"Shelly errors: {shelly_summary['error_samples']}")
+            if shelly_summary["status"] != "completed" and status == "completed":
+                status = "failed"
         for group in statistics.values():
             for s in group.values():
                 s["mean"] = s.pop("sum") / s["count"]
@@ -394,12 +420,14 @@ def main():
             status=status, samples=count, end=end,
             missing_gpu_samples=missing_gpu_samples,
             statistics=statistics,
+            shelly=shelly_summary,
             definitions={
                 "ram_used": "MemTotal minus MemAvailable, whole host",
                 "cpu_busy": "Aggregate busy percentage excluding idle and iowait",
                 "mean": "Arithmetic sample mean, not integrated energy",
                 "missing": "Unavailable sensor values are null, not zero",
-                "wall_power": "Manual meter readings only",
+                "wall_power": ("Shelly raw readings in shelly.jsonl" if args.shelly
+                               else "Manual meter readings only"),
                 "peak": "Observed sample maximum, not a guaranteed transient maximum",
             },
         )

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Coordinate telemetry and a bounded direct-inference workload."""
+"""Coordinate telemetry and bounded inference or Hermes workloads."""
 import argparse
 import datetime
 import json
@@ -29,13 +29,23 @@ def main():
     parser.add_argument("machine")
     parser.add_argument("--tokens", type=positive, default=8192)
     parser.add_argument("--predict", type=positive, default=512)
+    parser.add_argument("--shelly", help="Shelly local IPv4 address")
+    parser.add_argument("--repeat", type=positive, default=1,
+                        help="Sequential requests in one continuous capture")
+    parser.add_argument("--workload", choices=("inference", "hermes"),
+                        default="inference")
     args = parser.parse_args()
+    if args.workload == "hermes" and args.machine != "daedalus-01":
+        parser.error("Hermes v1 supports daedalus-01 only")
+    if args.shelly:
+        import ipaddress
+        args.shelly = str(ipaddress.IPv4Address(args.shelly))
     if not __import__("re").fullmatch(
         r"[A-Za-z0-9][A-Za-z0-9_.-]*", args.machine
     ):
         parser.error("Invalid machine name")
 
-    for script in ("performance-machine", "performance-inference"):
+    for script in ("performance-machine", "performance-" + args.workload):
         if not (ROOT / "scripts" / script).is_file():
             parser.error(f"Missing scripts/{script}")
 
@@ -51,8 +61,13 @@ def main():
     manifest = {
         "run_id": run_id,
         "machine": args.machine,
-        "input_tokens": args.tokens,
-        "output_tokens": args.predict,
+        "shelly_address": args.shelly,
+        "workload_kind": args.workload,
+        "input_tokens": args.tokens if args.workload == "inference" else None,
+        "output_tokens": args.predict if args.workload == "inference" else None,
+        "repeat": args.repeat,
+        "workloads": [],
+        "telemetry_limit_seconds": 720 * args.repeat + 180,
         "warmup_idle_seconds": 10,
         "recovery_seconds": 30,
         "status": "starting",
@@ -103,6 +118,8 @@ def main():
             save()
         if name == "workload" and line.startswith("Workload evidence: "):
             manifest["workload_directory"] = line.split(": ", 1)[1].strip()
+            manifest["workloads"][-1]["directory"] = manifest["workload_directory"]
+            manifest["workloads"][-1]["status"] = "running"
             save()
         return name, line
 
@@ -126,10 +143,11 @@ def main():
         with (out / "console.log").open("w") as log:
             telemetry = launch("telemetry", [
                 str(ROOT / "scripts/performance-machine"), args.machine,
-                "--stage", "heavy-inference",
-                "--seconds", "900",
+                *(["--shelly", args.shelly] if args.shelly else []),
+                "--stage", "hermes" if args.workload == "hermes" else "heavy-inference",
+                "--seconds", str(manifest["telemetry_limit_seconds"]),
                 "--notes",
-                f"Paired session {run_id}; input={args.tokens}; output={args.predict}",
+                f"Paired session {run_id}; workload={args.workload}; repeat={args.repeat}",
             ])
 
             deadline = time.monotonic() + 60
@@ -155,8 +173,8 @@ def main():
                 if raw.exists():
                     events = [
                         json.loads(line)
-                        for line in raw.read_text().splitlines()
-                        if line.strip()
+                        for line in raw.read_text().splitlines(keepends=True)
+                        if line.endswith("\n") and line.strip()
                     ]
                     if any(e.get("type") == "sample" for e in events):
                         break
@@ -172,22 +190,50 @@ def main():
 
             manifest["status"] = "running"
             save()
-            workload = launch("workload", [
-                str(ROOT / "scripts/performance-inference"), args.machine,
-                "--tokens", str(args.tokens),
-                "--predict", str(args.predict),
-            ])
+            for request_number in range(1, args.repeat + 1):
+                print(
+                    f"\nWORKLOAD: request {request_number} of {args.repeat}",
+                    flush=True,
+                )
+                closed.discard("workload")
+                manifest.pop("workload_directory", None)
+                entry = {
+                    "request_number": request_number,
+                    "status": "starting",
+                }
+                manifest["workloads"].append(entry)
+                save()
+                workload_argv = [
+                    str(ROOT / ("scripts/performance-" + args.workload)),
+                    args.machine,
+                ]
+                if args.workload == "hermes":
+                    workload_argv += ["--non-interactive"]
+                else:
+                    workload_argv += [
+                        "--tokens", str(args.tokens),
+                        "--predict", str(args.predict),
+                    ]
+                workload = launch("workload", workload_argv)
 
-            deadline = time.monotonic() + 720
-            while workload.poll() is None or "workload" not in closed:
-                consume(log)
-                if telemetry.poll() is not None:
-                    raise RuntimeError("Telemetry stopped during workload")
-                if time.monotonic() > deadline:
-                    raise RuntimeError("Workload exceeded controller timeout")
+                deadline = time.monotonic() + 720
+                while workload.poll() is None or "workload" not in closed:
+                    consume(log)
+                    if telemetry.poll() is not None:
+                        raise RuntimeError("Telemetry stopped during workload")
+                    if time.monotonic() > deadline:
+                        raise RuntimeError("Workload exceeded controller timeout")
 
-            manifest["workload_exit_code"] = workload.returncode
-            save()
+                manifest["workload_exit_code"] = workload.returncode
+                save()
+                entry["exit_code"] = workload.returncode
+                entry["status"] = (
+                    "completed" if workload.returncode == 0 else "failed"
+                )
+                save()
+                if workload.returncode != 0:
+                    break
+
             print("\nRECOVERY: recording 30 seconds after workload.", flush=True)
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
@@ -203,11 +249,33 @@ def main():
             summary = json.loads((capture / "summary.json").read_text())
             manifest["telemetry_samples"] = summary["samples"]
             manifest["telemetry_status"] = summary["status"]
+            if args.shelly:
+                meter = summary.get("shelly") or {}
+                manifest["shelly"] = meter
+                manifest["measurement_status"] = meter.get("status", "failed")
+                if (
+                    meter.get("status") not in ("completed", "degraded")
+                    or meter.get("valid_samples", 0) < 2
+                    or meter.get("worker_error")
+                ):
+                    raise RuntimeError("Shelly recorder failed or insufficient readings")
             if summary["samples"] <= 0 or summary["status"] == "failed":
                 raise RuntimeError("Telemetry did not preserve a valid capture")
-            manifest["status"] = (
-                "completed" if workload.returncode == 0 else "workload_failed"
+            manifest["workload_status"] = (
+                "completed" if workload.returncode == 0 else "failed"
             )
+            manifest["status"] = (
+                "workload_failed" if workload.returncode != 0 else
+                "completed_with_gaps"
+                if manifest.get("measurement_status") == "degraded" else
+                "completed"
+            )
+            if manifest["status"] == "completed_with_gaps":
+                print(
+                    "WARNING: Workloads completed; Shelly readings have gaps. "
+                    "Review error counts and timestamps before interpreting power.",
+                    flush=True,
+                )
     except KeyboardInterrupt:
         manifest["status"] = "interrupted"
     except Exception as exc:
