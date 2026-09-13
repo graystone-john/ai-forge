@@ -46,6 +46,15 @@ done
     exit 1
 }
 
+# Fail before compilation if the chosen toolkit cannot generate native sm120.
+if [[ ";$LLAMA_CUDA_ARCHITECTURES;" == *";120;"* ]]; then
+    gpu_codes="$("$LLAMA_CUDA_COMPILER" --list-gpu-code)"
+    if ! grep -Eq '^[[:space:]]*sm_120[[:space:]]*$' <<< "$gpu_codes"; then
+        echo "ERROR: selected CUDA compiler does not support sm120" >&2
+        exit 1
+    fi
+fi
+
 actual="$(git -C "$LLAMA_SOURCE_DIR" rev-parse HEAD)"
 [[ "$actual" == "$LLAMA_COMMIT" ]] || {
     echo "ERROR: expected $LLAMA_COMMIT; found $actual" >&2

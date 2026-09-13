@@ -101,6 +101,43 @@ before = inventory()
 (metadata / "version.txt").write_text(version + "\n")
 (metadata / "linked-libraries.txt").write_text(linked + "\n")
 
+# Record the actual compilers selected by CMake, including versioned CUDA paths.
+def cmake_setting(name):
+    values = []
+    for line in (build / "CMakeCache.txt").read_text().splitlines():
+        if line.startswith(name + ":") and "=" in line:
+            values.append(line.split("=", 1)[1])
+    if len(values) != 1 or not values[0]:
+        raise SystemExit("Missing or ambiguous CMake setting: " + name)
+    return values[0]
+
+actual_compilers = {
+    "gcc-version.txt": cmake_setting("CMAKE_C_COMPILER"),
+    "gxx-version.txt": cmake_setting("CMAKE_CXX_COMPILER"),
+    "cuda-version.txt": cmake_setting("CMAKE_CUDA_COMPILER"),
+}
+for compiler in actual_compilers.values():
+    if not Path(compiler).is_absolute() or not os.access(compiler, os.X_OK):
+        raise SystemExit("Captured compiler is not executable: " + compiler)
+(metadata / "compiler-paths.json").write_text(
+    json.dumps(actual_compilers, indent=2) + "\n"
+)
+
+# An sm120 capture must contain compiled CUDA code for that architecture.
+# This checks artifact contents; successful model execution is a separate test.
+if "120" in cmake_setting("CMAKE_CUDA_ARCHITECTURES").split(";"):
+    cuobjdump = Path(actual_compilers["cuda-version.txt"]).parent / "cuobjdump"
+    backends = sorted({p.resolve() for p in runtime.rglob("libggml-cuda.so*") if p.is_file()})
+    if not cuobjdump.is_file() or not backends:
+        raise SystemExit("Cannot inspect sm120 CUDA backend")
+    code_evidence = []
+    for backend in backends:
+        listing = run([str(cuobjdump), "--list-elf", str(backend)])
+        if "sm_120" not in listing:
+            raise SystemExit("CUDA backend lacks sm120 native code: " + str(backend))
+        code_evidence.append(str(backend) + "\n" + listing)
+    (metadata / "cuda-code.txt").write_text("\n".join(code_evidence) + "\n")
+
 evidence_commands = {
     "os-release.txt": ["cat", "/etc/os-release"],
     "kernel.txt": ["uname", "-a"],
@@ -115,9 +152,9 @@ evidence_commands = {
         "-f=${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n",
     ],
     "cmake-version.txt": ["cmake", "--version"],
-    "gcc-version.txt": ["/usr/bin/gcc-13", "--version"],
-    "gxx-version.txt": ["/usr/bin/g++-13", "--version"],
-    "cuda-version.txt": ["/usr/bin/nvcc", "--version"],
+    "gcc-version.txt": [actual_compilers["gcc-version.txt"], "--version"],
+    "gxx-version.txt": [actual_compilers["gxx-version.txt"], "--version"],
+    "cuda-version.txt": [actual_compilers["cuda-version.txt"], "--version"],
 }
 for filename, command in evidence_commands.items():
     (metadata / filename).write_text(run(command) + "\n")

@@ -9,7 +9,7 @@
     - "{{ llama_build_profile | default(playbook_dir ~ '/../profiles/runtimes/llama-b10612-daedalus.yaml') }}"
 
   vars:
-    ai_stores_root: "/home/nispoe/graystone/ai-stores"
+    ai_stores_root: "{{ playbook_dir }}/../../../ai-stores"
 
   tasks:
     - name: Capture through the existing AI Forge role

@@ -44,6 +44,22 @@
         llama_prebuilt.driver_version
     fail_msg: "Install the recorded NVIDIA configuration before deploying this artifact"
 
+- name: Read captured runtime driver prerequisites
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, '-f=${Version}', '{{ item.package }}']
+  loop: "{{ llama_prebuilt.driver_packages | default([]) }}"
+  register: llama_driver_prerequisites
+  changed_when: false
+
+- name: Require captured runtime driver package versions
+  ansible.builtin.assert:
+    that:
+      - item.stdout == item.item.version
+    fail_msg: "Install the approved base-system NVIDIA driver before runtime deployment"
+  loop: "{{ llama_driver_prerequisites.results }}"
+  loop_control:
+    label: "{{ item.item.package }}"
+
 - name: Check deployment inputs on Athena
   ansible.builtin.stat:
     path: "{{ item.path }}"
@@ -158,6 +174,21 @@
     msg:
       - "Completed: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
       - "APT install elapsed: {{ llama_runtime_apt_result.delta }}"
+
+- name: Configure captured CUDA runtime library paths
+  ansible.builtin.copy:
+    dest: "/etc/ld.so.conf.d/ai-forge-{{ llama_prebuilt.configuration_id }}.conf"
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ llama_prebuilt.library_paths | join('\n') }}\n"
+  when: llama_prebuilt.library_paths | default([]) | length > 0
+
+- name: Refresh captured runtime library cache
+  ansible.builtin.command:
+    argv: [ldconfig]
+  changed_when: false
+  when: llama_prebuilt.library_paths | default([]) | length > 0
 
 - name: Copy captured runtime from Athena
   ansible.builtin.copy:
