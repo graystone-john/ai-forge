@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import yaml
+
+NAME_RE = re.compile(r"^[a-z][a-z0-9-]*[a-z0-9]$")
+PROTECTED = {"athena-01"}
+
+
+def die(msg):
+    print(f"ERROR: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def run(cmd):
+    subprocess.run(cmd, check=True)
+
+
+def load_yaml(path):
+    with path.open() as f:
+        return yaml.safe_load(f) or {}
+
+
+def write_yaml_atomic(path, data):
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+    with os.fdopen(fd, "w") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+    with open(tmp) as f:
+        yaml.safe_load(f)
+    os.replace(tmp, path)
+
+
+def remove_host_from_inventory(node, machine):
+    changed = False
+    if isinstance(node, dict):
+        hosts = node.get("hosts")
+        if isinstance(hosts, dict) and machine in hosts:
+            del hosts[machine]
+            changed = True
+        for value in node.values():
+            changed = remove_host_from_inventory(value, machine) or changed
+    elif isinstance(node, list):
+        while machine in node:
+            node.remove(machine)
+            changed = True
+        for value in node:
+            changed = remove_host_from_inventory(value, machine) or changed
+    return changed
+
+
+def find_machine_dirs(repo, machine):
+    matches = []
+    machines_root = repo / "machines"
+    if not machines_root.exists():
+        return matches
+
+    for machine_yaml in machines_root.glob("*/machine.yaml"):
+        try:
+            data = load_yaml(machine_yaml)
+        except Exception:
+            continue
+        if data.get("name") == machine:
+            matches.append(machine_yaml.parent)
+
+    direct = machines_root / machine
+    if direct.exists() and direct not in matches:
+        matches.append(direct)
+
+    return sorted(matches)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Safely unregister an AI Forge machine from repo metadata."
+    )
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Continue when some files are already missing.",
+    )
+    parser.add_argument("machine")
+    args = parser.parse_args()
+
+    machine = args.machine
+    if not NAME_RE.fullmatch(machine):
+        die(f"invalid machine name: {machine}")
+    if machine in PROTECTED:
+        die(f"{machine} is protected and cannot be unregistered by this script")
+
+    repo = Path.cwd()
+    machine_dirs = find_machine_dirs(repo, machine)
+    host_vars = repo / "ansible" / "inventory" / "host_vars" / f"{machine}.yaml"
+    hosts_yaml = repo / "ansible" / "inventory" / "hosts.yaml"
+
+    if not hosts_yaml.exists():
+        die(f"missing inventory: {hosts_yaml}")
+
+    expected_any = bool(machine_dirs) or host_vars.exists()
+    if not expected_any and not args.force:
+        die(f"no registration files found for {machine}; use --force for partial cleanup")
+
+    inv = load_yaml(hosts_yaml)
+    inv_changed = remove_host_from_inventory(inv, machine)
+
+    actions = []
+    for machine_dir in machine_dirs:
+        actions.append(f"delete machine directory {machine_dir}")
+
+    if host_vars.exists():
+        actions.append(f"remove {host_vars}")
+    elif not args.force:
+        print(f"WARN: missing {host_vars}")
+
+    if inv_changed:
+        actions.append(f"remove {machine} from {hosts_yaml}")
+    elif not args.force:
+        print(f"WARN: {machine} was not present in inventory hosts")
+
+    print("Planned actions:")
+    for action in actions:
+        print(f"  - {action}")
+
+    if args.dry_run:
+        print("Dry run only; no files changed.")
+        return
+
+    if not actions:
+        print("Nothing to do.")
+        return
+
+    if inv_changed:
+        write_yaml_atomic(hosts_yaml, inv)
+
+    if host_vars.exists():
+        host_vars.unlink()
+
+    for machine_dir in machine_dirs:
+        if machine_dir.exists():
+            shutil.rmtree(machine_dir)
+
+    run(["./forge", "machine", "validate"])
+    try:
+        run(["./forge", "machine", "list"])
+    except subprocess.CalledProcessError:
+        run(["./forge", "machines"])
+
+
+if __name__ == "__main__":
+    main()
