@@ -1,0 +1,54 @@
+---
+- name: Determine llama runtime availability
+  ansible.builtin.set_fact:
+    llama_runtime_has_prebuilt: "{{ llama_prebuilt is defined }}"
+    llama_runtime_has_source_build: "{{ llama_source_build is defined }}"
+
+- name: Require llama runtime profile content
+  ansible.builtin.assert:
+    that:
+      - llama_runtime_has_prebuilt or llama_runtime_has_source_build
+    fail_msg: "Runtime profile must define llama_prebuilt or llama_source_build"
+
+- name: Deploy captured llama runtime
+  ansible.builtin.include_tasks: llama-prebuilt-deploy.yaml
+  when: llama_runtime_has_prebuilt
+
+- name: Build, capture, promote, and deploy llama runtime
+  when:
+    - not llama_runtime_has_prebuilt
+    - llama_runtime_has_source_build
+  block:
+    - name: Build llama runtime from source
+      ansible.builtin.include_tasks: llama-source-build.yaml
+
+    - name: Capture built llama runtime
+      ansible.builtin.include_tasks: llama-capture.yaml
+
+    - name: Promote captured runtime into selected profile on Athena
+      ansible.builtin.command:
+        argv:
+          - "{{ playbook_dir }}/../../scripts/promote-llama-runtime.py"
+          - "--profile"
+          - "{{ llama_runtime_profile | default(llama_deploy_profile) }}"
+          - "--capture-dir"
+          - "{{ llama_capture_store }}"
+          - "--archive-sha256"
+          - "{{ llama_capture.sha256 }}"
+      delegate_to: localhost
+      become: false
+      register: llama_runtime_promotion
+      changed_when: true
+
+    - name: Reload promoted llama runtime profile
+      ansible.builtin.include_vars:
+        file: "{{ llama_runtime_profile | default(llama_deploy_profile) }}"
+
+    - name: Require promoted runtime profile
+      ansible.builtin.assert:
+        that:
+          - llama_prebuilt is defined
+        fail_msg: "Runtime capture completed, but profile promotion did not define llama_prebuilt"
+
+    - name: Deploy newly captured llama runtime
+      ansible.builtin.include_tasks: llama-prebuilt-deploy.yaml

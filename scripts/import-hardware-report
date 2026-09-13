@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+"""Import a hardware report into an inactive machine draft."""
+import argparse
+import copy
+from datetime import datetime
+import ipaddress
+import os
+from pathlib import Path
+import re
+import sys
+import tempfile
+
+import yaml
+from pxe_policy import report_pci, record_nic, identity
+
+
+def fail(message):
+    raise SystemExit(f"ERROR: {message}")
+
+
+def resolve_report(path):
+    if path.is_file():
+        return path
+
+    if not path.is_dir():
+        fail(f"Report path is not a file or directory: {path}")
+
+    reports = sorted(path.glob("hardware-report-*.txt"))
+    if not reports:
+        fail(f"No hardware report found in {path}")
+
+    pattern = re.compile(
+        r"^hardware-report-(\d{8})-(\d{6})-[A-Za-z0-9]+\.txt$"
+    )
+
+    dated = []
+    for report in reports:
+        match = pattern.match(report.name)
+        if not match:
+            fail(f"Report does not contain a usable timestamp: {report.name}")
+
+        timestamp = datetime.strptime(
+            match.group(1) + match.group(2),
+            "%Y%m%d%H%M%S",
+        )
+        dated.append((timestamp, report))
+
+    dated.sort(key=lambda item: (item[0], item[1].name), reverse=True)
+    selected = dated[0][1]
+
+    if len(dated) > 1:
+        print(
+            f"WARNING: Found {len(dated)} hardware reports; "
+            f"using most recent dated report: {selected.name}",
+            file=sys.stderr,
+        )
+        for _, report in dated[1:]:
+            print(f"  older: {report.name}", file=sys.stderr)
+
+    return selected
+
+
+def one(pattern, text):
+    matches = re.findall(pattern, text, re.MULTILINE)
+    if len(matches) != 1 or not matches[0].strip():
+        fail(f"Missing or ambiguous report field: {pattern}")
+    return matches[0].strip()
+
+
+def section(report, title):
+    return one(
+        rf"^=== {re.escape(title)} ===\n([\s\S]*?)(?=^=== |\Z)",
+        report,
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("machine")
+    parser.add_argument("report", type=Path)
+    parser.add_argument("--interface", required=True)
+    parser.add_argument("--wifi-interface")
+    parser.add_argument("--role", required=True)
+    parser.add_argument("--profile", action="append", required=True)
+    parser.add_argument("--inference-profile", required=True)
+    parser.add_argument("--runtime-profile", required=True)
+    args = parser.parse_args()
+
+    if not re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", args.machine):
+        fail("Invalid machine name.")
+
+    root = Path(__file__).resolve().parents[1]
+    directory = root / "machines" / args.machine
+    draft = directory / "machine.yaml.example"
+    if (directory / "machine.yaml").exists():
+        fail("Machine is registered; only inactive drafts can be updated.")
+    if not draft.is_file():
+        fail(f"Draft not found: {draft}")
+
+    original = draft.read_text()
+    data = yaml.safe_load(original)
+    if not isinstance(data, dict) or data.get("name") != args.machine:
+        fail("Draft identity does not match.")
+    updated = copy.deepcopy(data)
+
+    args.report = resolve_report(args.report)
+    raw = args.report.read_bytes()
+    report = raw.decode("utf-8")
+    if "ERROR:" in report or "USB enclosure detected." in report:
+        fail("Report contains errors or USB enclosure identifiers.")
+
+    def assign(path, value, placeholder):
+        node = updated
+        for key in path[:-1]:
+            if not isinstance(node.get(key), dict):
+                fail(f"Missing configuration section: {key}")
+            node = node[key]
+        key = path[-1]
+        if node.get(key) != placeholder and node.get(key) != value:
+            fail(f"Existing {'.'.join(path)} conflicts with the import.")
+        node[key] = value
+
+    architecture = section(report, "Machine architecture")
+    architectures = {"x86_64": "amd64", "aarch64": "arm64"}
+    if architecture not in architectures:
+        fail(f"Unsupported architecture: {architecture}")
+    assign(["architecture"], architectures[architecture], "MACHINE_ARCHITECTURE")
+
+    board = section(report, "Motherboard")
+    vendor = one(r"^board_vendor:[ \t]*(.+)$", board)
+    name = one(r"^board_name:[ \t]*(.+)$", board)
+    assign(["hardware", "motherboard"], f"{vendor} {name}", "MACHINE_MOTHERBOARD")
+    cpu = one(r"^Model name:[ \t]*(.+)$", section(report, "CPU"))
+    assign(["hardware", "cpu"], cpu, "MACHINE_CPU")
+
+    memory = section(report, "Installed memory modules")
+    sizes = re.findall(r"^[ \t]*Size:[ \t]*(.+)$", memory, re.MULTILINE)
+    if not sizes:
+        fail("Installed RAM capacity is unavailable; refusing to infer it from MemTotal.")
+    total_mb = 0
+    for size in sizes:
+        if size.strip() == "No Module Installed":
+            continue
+        match = re.fullmatch(r"(\d+)\s+(MB|GB|TB)", size.strip())
+        if not match:
+            fail(f"Unknown memory module size: {size}")
+        total_mb += int(match[1]) * {"MB": 1, "GB": 1024, "TB": 1048576}[match[2]]
+    if total_mb <= 0 or total_mb % 1024:
+        fail("Installed RAM is not a positive whole number of GiB.")
+    assign(["hardware", "memory_gb"], total_mb // 1024, "MACHINE_MEMORY_GB")
+
+    graphics = section(report, "Graphics devices")
+    gpus = re.findall(
+        r"^[0-9a-fA-F:.]+ (?:VGA compatible controller|3D controller|Display controller)"
+        r" \[[0-9a-fA-F]+\]: (.+)$",
+        graphics, re.MULTILINE,
+    )
+    if not gpus:
+        fail("No named or PCI-identified graphics devices found.")
+    assign(["hardware", "gpu"], "; ".join(gpus), "MACHINE_GPU")
+
+    device = one(r"^Device: (.+)$", report)
+    if not re.fullmatch(r"/dev/nvme\d+n\d+", device):
+        fail("This importer currently requires a native NVMe disk.")
+    hardware = section(report, "Hardware identity (smartctl)")
+    model = one(r"^(?:model:|Model Number:)[ \t]*(.+)$", hardware)
+    serial = one(r"^(?:serial:|Serial Number:)[ \t]*(.+)$", hardware)
+    udev = section(report, "Operating-system identity (udev)")
+    udev_serial = one(r"^ID_SERIAL=(.+)$", udev)
+    if not serial.strip("0") or serial != one(r"^ID_SERIAL_SHORT=(.+)$", udev):
+        fail("Invalid or conflicting disk serial.")
+    if model != one(r"^ID_MODEL=(.+)$", udev):
+        fail("Hardware and udev disk models disagree.")
+    # Preserve the exact reported ID, including an optional numeric suffix.
+    # Do not invent a suffix or use a wildcard for installer matching.
+    if re.search(r"_" + re.escape(serial) + r"(?:_[1-9][0-9]*)?\Z", udev_serial) is None:
+        fail("Installer serial does not match the hardware serial.")
+    if f"/dev/disk/by-id/nvme-{udev_serial}" not in report.splitlines():
+        fail("Matching native NVMe by-id link missing.")
+    for key, value in dict(model=model, serial=serial, udev_serial=udev_serial).items():
+        assign(["hardware", "os_disk", key], value, "OS_DISK_" + key.upper())
+
+    # Preserve namespace evidence if present; older reports remain usable.
+    if "=== NVMe namespace identity ===" in report:
+        ns_text = section(report, "NVMe namespace identity")
+        ns_value = one(r"^namespace_id: ([1-9][0-9]*)$", ns_text)
+        nsid = int(ns_value)
+        os_disk = updated["hardware"]["os_disk"]
+        if "namespace_id" in os_disk and os_disk["namespace_id"] != nsid:
+            fail("Conflicting NVMe namespace identity.")
+        os_disk["namespace_id"] = nsid
+
+    interfaces = section(report, "Physical network interfaces")
+    nic = one(
+        rf"^Interface: {re.escape(args.interface)}\n([\s\S]*?)(?=^Interface: |\Z)",
+        interfaces,
+    )
+    if one(r"^Kind: (.+)$", nic) != "non-wireless":
+        fail("Choose a wired provisioning interface.")
+    permanent = re.findall(r"^Permanent address: (.+)$", nic, re.MULTILINE)
+    if permanent:
+        mac = one(r"^Permanent address: (.+)$", nic).lower()
+    else:
+        if one(r"^addr_assign_type: (.+)$", nic) != "0":
+            fail("Interface address is not reported as permanent.")
+        mac = one(r"^address: (.+)$", nic).lower()
+    if not re.fullmatch(r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}", mac):
+        fail("Invalid MAC address.")
+    if mac == "00:00:00:00:00:00" or int(mac[:2], 16) & 1:
+        fail("Invalid unicast MAC address.")
+    assign(["network", "provisioning_mac"], mac, "PROVISIONING_MAC")
+
+    # Persist report-validated interfaces for provisioning and Ansible.
+    assign(
+        ["network", "provisioning_interface"],
+        args.interface,
+        "PROVISIONING_INTERFACE",
+    )
+
+    wireless = []
+    for name, details in re.findall(
+        r"^Interface: ([^\n]+)\n([\s\S]*?)(?=^Interface: |\Z)",
+        interfaces,
+        re.MULTILINE,
+    ):
+        if re.search(r"^Kind: wireless$", details, re.MULTILINE):
+            wireless.append(name.strip())
+
+    if args.wifi_interface:
+        if args.wifi_interface not in wireless:
+            fail(
+                f"Selected Wi-Fi interface {args.wifi_interface!r} "
+                f"is not a wireless interface in the report: {wireless}"
+            )
+        selected_wifi = args.wifi_interface
+    elif len(wireless) == 1:
+        selected_wifi = wireless[0]
+    else:
+        fail(
+            f"Expected one wireless interface; found {wireless}. "
+            "For multiple interfaces, select one with --wifi-interface."
+        )
+
+    assign(["network", "wifi_interface"], selected_wifi, "WIFI_INTERFACE")
+    record_nic(updated["network"], report_pci(nic))
+
+    # Allocation policy for the existing AI Forge provisioning network.
+    subnet = ipaddress.ip_network("10.10.10.0/24")
+    config = yaml.safe_load((root / "config/forge.yaml").read_text())
+    server = ipaddress.ip_address(config["provisioning"]["server_ip"])
+    if server not in subnet:
+        fail("Controller subnet differs from this allocation policy.")
+    occupied = {server}
+    for folder in sorted((root / "machines").iterdir()):
+        if not folder.is_dir() or folder.name == "templates" or folder == directory:
+            continue
+        for filename in ("machine.yaml", "machine.yaml.example"):
+            path = folder / filename
+            if not path.is_file():
+                continue
+            other = yaml.safe_load(path.read_text())
+            if not isinstance(other, dict):
+                fail(f"Invalid inventory file: {path}")
+            network = other.get("network") or {}
+            address = network.get("provisioning_ip")
+            if address and address != "PROVISIONING_IP":
+                try:
+                    occupied.add(ipaddress.ip_address(str(address)))
+                except ValueError:
+                    fail(f"Invalid IP in {path}")
+            if str(network.get("provisioning_mac", "")).lower() == mac:
+                fail(f"Provisioning MAC is already assigned in {path}")
+
+    current = updated["network"].get("provisioning_ip")
+    if current == "PROVISIONING_IP":
+        address = next(
+            (subnet[n] for n in range(20, 255) if subnet[n] not in occupied),
+            None,
+        )
+        if address is None:
+            fail("No addresses remain; explicitly unregister a machine first.")
+    else:
+        try:
+            address = ipaddress.ip_address(str(current))
+        except ValueError:
+            fail("Existing draft IP is invalid.")
+        if address not in subnet or not 20 <= int(address) - int(subnet.network_address) <= 254:
+            fail("Existing draft IP is outside the allocation range.")
+        if address in occupied:
+            fail("Existing draft IP conflicts with another reservation.")
+    assign(["network", "provisioning_ip"], str(address), "PROVISIONING_IP")
+    assign(["network", "provisioning_subnet"], str(subnet), "PROVISIONING_SUBNET")
+    assign(["role"], args.role, "MACHINE_ROLE")
+    assign(["profiles"], args.profile, "MACHINE_PROFILES")
+    assign(
+        ["inference_profile"],
+        args.inference_profile,
+        "INFERENCE_PROFILE",
+    )
+
+    # Persist the selected llama runtime profile. The same profile may contain
+    # only build instructions on first registration; Ansible promotes it with a
+    # captured runtime after a successful build/capture.
+    if not re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", args.runtime_profile):
+        fail("Invalid runtime profile name.")
+    runtime_file = root / "ansible/profiles/runtimes" / (args.runtime_profile + ".yaml")
+    if not runtime_file.is_file():
+        fail(f"Runtime profile does not exist: {runtime_file}")
+    runtime_data = yaml.safe_load(runtime_file.read_text())
+    if not isinstance(runtime_data, dict) or not (
+        runtime_data.get("llama_source_build") or runtime_data.get("llama_prebuilt")
+    ):
+        fail("Runtime profile must define llama_source_build or llama_prebuilt.")
+    existing_runtime = updated.get("runtime_profile")
+    if existing_runtime not in (None, "RUNTIME_PROFILE", args.runtime_profile):
+        fail("Existing runtime profile conflicts with the import.")
+    updated["runtime_profile"] = args.runtime_profile
+
+    identity(updated)
+
+    # Serialize and validate before writing anything.
+    rendered = yaml.safe_dump(updated, sort_keys=False, allow_unicode=True)
+    if yaml.safe_load(rendered) != updated:
+        fail("YAML round-trip validation failed.")
+
+    reports = directory / "hardware-reports"
+    reports.mkdir(exist_ok=True)
+    destination = reports / args.report.name
+    if destination.exists():
+        if destination.read_bytes() != raw:
+            fail("A different report already uses this filename.")
+    else:
+        with destination.open("xb") as stream:
+            stream.write(raw)
+    if destination.read_bytes() != raw:
+        fail("Report copy verification failed.")
+
+    fd, temporary = tempfile.mkstemp(prefix=".hardware-import-", dir=directory)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            stream.write(rendered)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, draft.stat().st_mode & 0o777)
+        os.replace(temporary, draft)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+    print(f"Report copied and verified: {destination}")
+    print(f"Draft updated: {draft}")
+    print(f"Provisioning interface: {args.interface}; MAC: {mac}; IP: {address}")
+    print("Draft remains unregistered. No deployment, disk operations or commits.")
+    print("Profile existence and full provisioning validation are still required.")
+
+
+if __name__ == "__main__":
+    main()

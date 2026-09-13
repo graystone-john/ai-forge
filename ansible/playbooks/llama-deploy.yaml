@@ -11,4 +11,4 @@
     - name: Deploy through the existing AI Forge role
       ansible.builtin.include_role:
         name: ai-forge
-        tasks_from: llama-prebuilt-deploy.yaml
+        tasks_from: llama-runtime-auto.yaml

@@ -1,0 +1,31 @@
+name: daedalus-02
+family: daedalus
+generation: 2
+role: local-ai-coding-node
+architecture: amd64
+hardware:
+  motherboard: Gigabyte Technology Co., Ltd. Z690 AORUS MASTER
+  cpu: 12th Gen Intel(R) Core(TM) i9-12900K
+  memory_gb: 32
+  gpu: Intel Corporation AlderLake-S GT1 [8086:4680] (rev 0c); NVIDIA Corporation
+    Device [10de:2b85] (rev a1)
+  os_disk:
+    model: WD_BLACK SN850X 4000GB
+    serial: 23122X800326
+    udev_serial: WD_BLACK_SN850X_4000GB_23122X800326
+    namespace_id: 1
+network:
+  provisioning_mac: d8:5e:d3:0e:b8:3c
+  provisioning_ip: 10.10.10.21
+  provisioning_subnet: 10.10.10.0/24
+  provisioning_interface: enp3s0
+  wifi_interface: wlp4s0
+  provisioning_pci_id: 1d6a:14c0
+  provisioning_loader: aqc1xx
+ansible:
+  user: ai-forge
+inference_profile: muse-glimmer-30b
+runtime_profile: llama-b10612-daedalus-02-sm120
+profiles:
+- ubuntu-ai-node
+- coding-agent

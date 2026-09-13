@@ -1,0 +1,37 @@
+llama_source_build:
+  version: b10612
+  commit: 7584430716ee229751771ed0d6bbcb780d105eeb
+  configuration_id: ubuntu-noble-amd64-cuda12.8-sm120-daedalus-02-native
+  platform:
+    distribution: Ubuntu
+    release: noble
+    architecture: x86_64
+  root: /opt/ai-forge/llama.cpp/b10612-cuda-sm120-daedalus-02
+  cuda_architectures: '120'
+  cpu_native: 'ON'
+  c_compiler: /usr/bin/gcc-13
+  cxx_compiler: /usr/bin/g++-13
+  cuda_compiler: /usr/local/cuda-12.8/bin/nvcc
+  source_store: '{{ playbook_dir }}/../../../ai-stores/vault/github/ggml-org/llama.cpp/7584430716ee229751771ed0d6bbcb780d105eeb/source.git'
+  ui_archive: '{{ playbook_dir }}/../../../ai-stores/vault/huggingface/buckets/ggml-org/llama-ui/b10612/dist.tar.gz'
+  ui_sha256: 3f7a482b86620b5dfbaf3432927bd357e679440237d3d83c27c07423cecf1f6d
+  apt_repository: http://10.10.10.1:81/ai-stores/vault/graystone/llama.cpp/dependencies/cuda12.8-sm120/20260912T204212.197505Z/apt
+  package_manifest: '{{ playbook_dir }}/../../../ai-stores/vault/graystone/llama.cpp/dependencies/cuda12.8-sm120/20260912T204212.197505Z/amd64-closure.tsv'
+  jobs: 4
+llama_prebuilt:
+  version: b10612
+  commit: 7584430716ee229751771ed0d6bbcb780d105eeb
+  configuration_id: ubuntu-noble-amd64-cuda12.8-sm120-daedalus-02-native
+  root: /opt/ai-forge/llama.cpp/b10612-cuda-sm120-daedalus-02
+  archive: '{{ playbook_dir }}/../../../ai-stores/vault/graystone/llama.cpp/b10612/ubuntu-noble-amd64-cuda12.8-sm120-daedalus-02-native/20260912T205324Z-atcqkubl/llama-runtime.tar.gz'
+  archive_sha256: 7f063ed1e4ceb920a29b29de12ffda9e0416c95110e0acff1fd0e9923ae66ea6
+  package_manifest: '{{ playbook_dir }}/../../../ai-stores/vault/graystone/llama.cpp/dependencies/cuda12.8-sm120/20260912T204212.197505Z/amd64-closure.tsv'
+  package_manifest_sha256: 87a1325a6dacc2cc026601f817297d9d1ab1dde6b639e23f040402795dfb0f18
+  apt_repository: http://10.10.10.1:81/ai-stores/vault/graystone/llama.cpp/dependencies/cuda12.8-sm120/20260912T204212.197505Z/apt
+  distribution: Ubuntu
+  release: noble
+  architecture: x86_64
+  cpu_model: 12th Gen Intel(R) Core(TM) i9-12900K
+  gpu_name: NVIDIA GeForce RTX 5090
+  compute_capability: '12.0'
+  driver_version: '595.84'

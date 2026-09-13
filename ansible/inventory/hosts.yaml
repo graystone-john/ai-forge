@@ -4,8 +4,11 @@ all:
       hosts:
         daedalus-01:
           ansible_host: 10.10.10.20
-
+        daedalus-02:
+          ansible_host: 10.10.10.21
     local_ai_coding_node:
       hosts:
         daedalus-01:
           ansible_host: 10.10.10.20
+        daedalus-02:
+          ansible_host: 10.10.10.21

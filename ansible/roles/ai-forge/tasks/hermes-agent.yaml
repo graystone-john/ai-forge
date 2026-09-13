@@ -439,6 +439,20 @@
   changed_when: false
   failed_when: false
 
+- name: Check Hermes TUI esbuild dependency
+  ansible.builtin.command:
+    argv:
+      - "{{ hermes_node_root }}/bin/node"
+      - -e
+      - "import('esbuild')"
+  args:
+    chdir: "{{ hermes_source }}/ui-tui"
+  environment:
+    PATH: "{{ hermes_node_root }}/bin:/usr/bin:/bin"
+  register: hermes_tui_esbuild_check
+  changed_when: false
+  failed_when: false
+
 - name: Seed Hermes isolated npm cache
   ansible.builtin.command:
     argv:
@@ -453,7 +467,7 @@
     npm_config_update_notifier: "false"
   register: hermes_npm_cache_seed
   changed_when: "'CACHED:' in hermes_npm_cache_seed.stdout"
-  when: hermes_npm_tree_check.rc != 0
+  when: hermes_npm_tree_check.rc != 0 or hermes_tui_esbuild_check.rc != 0
 
 - name: Record Hermes TUI npm installation start
   ansible.builtin.set_fact:
@@ -489,7 +503,7 @@
     npm_config_update_notifier: "false"
   register: hermes_npm_ci
   changed_when: "'added ' in hermes_npm_ci.stdout"
-  when: hermes_npm_tree_check.rc != 0
+  when: hermes_npm_tree_check.rc != 0 or hermes_tui_esbuild_check.rc != 0
 
 - name: Record Hermes TUI npm installation completion
   ansible.builtin.set_fact:

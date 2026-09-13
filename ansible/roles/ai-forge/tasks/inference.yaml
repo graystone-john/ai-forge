@@ -1,6 +1,6 @@
 ---
 - name: Deploy preserved prebuilt llama.cpp
-  ansible.builtin.include_tasks: llama-prebuilt-deploy.yaml
+  ansible.builtin.include_tasks: llama-runtime-auto.yaml
 
 - name: Deploy model and projector
   ansible.builtin.include_tasks: model.yaml

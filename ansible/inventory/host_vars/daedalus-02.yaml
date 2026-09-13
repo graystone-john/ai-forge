@@ -1,0 +1,17 @@
+ai_forge_machine: daedalus-02
+ansible_host: 10.10.10.21
+ansible_user: ai-forge
+ansible_python_interpreter: /usr/bin/python3
+ansible_ssh_common_args: -o StrictHostKeyChecking=accept-new
+provisioning:
+  interface: enp3s0
+  ip: 10.10.10.21
+  subnet: 10.10.10.0/24
+  mac: d8:5e:d3:0e:b8:3c
+daedalus_network:
+  wifi_interface: wlp4s0
+inference_profile: muse-glimmer-30b
+runtime_profile: llama-b10612-daedalus-02-sm120
+llama_runtime_profile: '{{ playbook_dir }}/../profiles/runtimes/llama-b10612-daedalus-02-sm120.yaml'
+llama_build_profile: '{{ playbook_dir }}/../profiles/runtimes/llama-b10612-daedalus-02-sm120.yaml'
+llama_deploy_profile: '{{ playbook_dir }}/../profiles/runtimes/llama-b10612-daedalus-02-sm120.yaml'
