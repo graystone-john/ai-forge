@@ -2,7 +2,7 @@ provisioning:
   server_ip: 10.10.10.1
 
 defaults:
-  username: nispoe
+  username: ai-forge
 
 images:
   ubuntu:

@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Rename the existing operator; run as root from a separate admin account.
+
+Default mode only checks prerequisites. Never terminates sessions or changes IDs.
+"""
+import argparse
+import datetime
+import grp
+import os
+from pathlib import Path
+import pwd
+import re
+import socket
+import subprocess
+import sys
+
+OLD, NEW = "nispoe", "graystone"
+OLD_HOME, NEW_HOME = Path("/home/nispoe"), Path("/home/graystone")
+
+
+def run(*args):
+    subprocess.run(args, check=True)
+
+
+def require(condition, message):
+    if not condition:
+        sys.exit(message)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", choices=["athena", "daedalus-01"], required=True)
+    parser.add_argument("--apply", action="store_true")
+    args = parser.parse_args()
+    require(os.geteuid() == 0, "Run as root from an independent administrative session.")
+    require(socket.gethostname().split('.')[0] == args.host, "Unexpected hostname; refusing migration.")
+    require(os.environ.get("SUDO_USER") != OLD, "Do not run from the account being renamed.")
+    account = pwd.getpwnam(OLD)
+    group = grp.getgrnam(OLD)
+    require(account.pw_dir == str(OLD_HOME), "Unexpected old home.")
+    require(group.gr_gid == account.pw_gid, "Unexpected primary group.")
+    require(not any(p.pw_name == NEW for p in pwd.getpwall()), "Target account already exists.")
+    require(not any(g.gr_name == NEW for g in grp.getgrall()), "Target group already exists.")
+    require(OLD_HOME.is_dir() and not OLD_HOME.is_symlink(), "Old home must be a real directory.")
+    require(not os.path.lexists(NEW_HOME), "Target home already exists.")
+    require(not os.path.ismount(OLD_HOME), "Home is a mount point; arrange a separate mount migration.")
+    require(OLD_HOME.stat().st_dev == NEW_HOME.parent.stat().st_dev,
+            "Home move must be a rename within the same filesystem.")
+    processes = subprocess.run(["pgrep", "-u", str(account.pw_uid)], capture_output=True)
+    require(processes.returncode == 1, "Operator processes remain (or process check failed); log out first.")
+
+    config = [Path('/etc/subuid'), Path('/etc/subgid')]
+    if args.host == 'athena':
+        require(subprocess.run(['systemctl', 'is-active', '--quiet', 'ai-forge-controller']).returncode != 0,
+                "Stop ai-forge-controller before cutover.")
+        config += [Path('/etc/systemd/system/ai-forge-controller.service'),
+                   Path('/etc/nginx/sites-available/ai-forge'), Path('/etc/nginx/conf.d/ai-stores.conf')]
+    else:
+        config += [Path('/etc/sudoers.d/ai-forge-boot-control'),
+                   Path('/etc/cloud/cloud.cfg.d/99-installer.cfg')]
+    require(all(p.is_file() and not p.is_symlink() for p in config), "Expected configuration missing or symlinked.")
+    named = [Path('/var/spool/cron/crontabs') / OLD, Path('/var/mail') / OLD,
+             Path('/var/lib/systemd/linger') / OLD, Path('/var/lib/AccountsService/users') / OLD]
+    for p in named:
+        require(not os.path.lexists(p.with_name(NEW)), f"Target already exists: {p.with_name(NEW)}")
+    run('/usr/sbin/visudo', '-c')
+    print(f"Preflight passed: {args.host}, UID {account.pw_uid}, GID {account.pw_gid}.")
+    if not args.apply:
+        return
+
+    os.umask(0o077)
+    backup = Path('/var/backups') / ('graystone-username-' + datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'))
+    backup.mkdir(mode=0o700)
+    files = [Path('/etc') / name for name in ['passwd', 'shadow', 'group', 'gshadow']] + config + named
+    for p in files:
+        if p.exists():
+            run('cp', '-a', '--parents', str(p), str(backup))
+    (backup / 'identity.txt').write_text(f"host={args.host}\nuid={account.pw_uid}\ngid={account.pw_gid}\n")
+    print(f"Root-only recovery files: {backup}", flush=True)
+    # Do not use useradd, userdel, -u/-g, or recursive chown: preserve ownership.
+    run('usermod', '--login', NEW, '--home', str(NEW_HOME), '--move-home', OLD)
+    run('groupmod', '--new-name', NEW, OLD)
+    for p in config:
+        text = p.read_text()
+        updated = re.sub(r'(?<![A-Za-z0-9_-])nispoe(?![A-Za-z0-9_-])', NEW, text)
+        if updated != text:
+            # In-place write preserves mode, owner and ACL; protected backup exists.
+            p.write_text(updated)
+    for p in named:
+        if p.exists():
+            p.rename(p.with_name(NEW))
+    migrated = pwd.getpwnam(NEW)
+    require((migrated.pw_uid, migrated.pw_gid) == (account.pw_uid, account.pw_gid), "ID verification failed.")
+    require(migrated.pw_dir == str(NEW_HOME) and NEW_HOME.is_dir(), "Home verification failed.")
+    run('/usr/sbin/visudo', '-c')
+    if args.host == 'athena':
+        run('systemctl', 'daemon-reload')
+        run('nginx', '-t')
+        print('Account renamed. Complete home-path repairs in the handoff before starting services.')
+    else:
+        print('Account renamed. Verify fresh SSH access as graystone using the existing management key.')
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,51 @@
+#!/usr/bin/python3
+"""Prepare and verify as the operator; publish with the installed bounded helper."""
+import importlib.machinery
+import importlib.util
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+
+ROOT=Path(__file__).resolve().parents[1]
+loader=importlib.machinery.SourceFileLoader('forge_pxe_machine',str(ROOT/'scripts/pxe-machine'))
+spec=importlib.util.spec_from_loader(loader.name,loader)
+pxe=importlib.util.module_from_spec(spec); loader.exec_module(pxe)
+
+
+def main():
+    ms,registry,files=pxe.native_files()
+    expected=pxe.render(ms,registry)
+    if (ROOT/'generated/dnsmasq/machines.conf').read_text()!=expected:
+        raise ValueError('Generated DHCP reservations are stale')
+    base=(ROOT/'configs/dnsmasq/provisioning.conf').read_bytes()
+    pxe.route_check(base.decode())
+    pins=json.loads((ROOT/'config/pxe-legacy.json').read_text())
+    deb=ROOT.parent/'ai-stores'/pins['deb']
+    if pxe.sha(deb)!=pins['deb_sha256']: raise ValueError('Legacy package checksum mismatch')
+    with tempfile.TemporaryDirectory(prefix='forge-dhcp-') as tmp:
+        stage=Path(tmp)
+        pxe.run(['dpkg-deb','-x',deb,stage/'unpacked'])
+        efi=stage/'unpacked/usr/lib/ipxe/ipxe.efi'
+        if pxe.sha(efi)!=pins['efi_sha256']: raise ValueError('Legacy EFI checksum mismatch')
+        files['ipxe.efi']=efi.read_bytes()
+        (stage/'base.conf').write_bytes(base)
+        (stage/'machines.conf').write_text(expected)
+        for name,data in files.items(): (stage/name).write_bytes(data)
+        (stage/'manifest.json').write_text(json.dumps({'loaders':sorted(files)}))
+        result=subprocess.run(['sudo','-n','/usr/local/sbin/ai-forge-dhcp-deploy','--stage',stage],check=True,text=True,stdout=subprocess.PIPE)
+        outcome=json.loads(result.stdout)
+        print('DHCP and verified loaders deployed without an interactive sudo prompt.')
+        tx=Path(outcome['transaction'])
+        print('Rollback transaction: '+str(tx))
+        # The authoritative rollback data is root-owned; preserve an evidence
+        # copy in ai-stores without executing repository code as root.
+        dest=ROOT.parent/'ai-stores/vault/tools/ipxe/deployments'/(tx.name+'-helper')
+        try:
+            shutil.copytree(tx,dest)
+            print('AI Stores evidence copy: '+str(dest))
+        except OSError as e:
+            print('Deployment succeeded; evidence copy failed: '+str(e))
+
+if __name__=='__main__': main()

@@ -1,0 +1,13 @@
+[Unit]
+Description=Graystone AI Forge Boot Controller
+After=network.target
+
+[Service]
+Type=simple
+User=graystone
+ExecStart=/usr/bin/python3 /home/graystone/graystone/ai-forge/scripts/boot-controller.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
