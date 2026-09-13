@@ -1,0 +1,30 @@
+name: daedalus-01
+family: daedalus
+generation: 1
+role: local-ai-coding-node
+architecture: amd64
+hardware:
+  motherboard: ASUSTeK COMPUTER INC. ROG MAXIMUS XIII APEX
+  cpu: 11th Gen Intel(R) Core(TM) i9-11900K @ 3.50GHz
+  memory_gb: 32
+  gpu: NVIDIA Corporation GA102 [GeForce RTX 3090] [10de:2204] (rev a1)
+  os_disk:
+    model: WD_BLACK SN850 1TB
+    serial: 21113D441401
+    udev_serial: WD_BLACK_SN850_1TB_21113D441401
+    namespace_id: 1
+network:
+  provisioning_mac: f0:2f:74:d3:34:d2
+  provisioning_ip: 10.10.10.20
+  provisioning_subnet: 10.10.10.0/24
+  provisioning_interface: enp5s0
+  wifi_interface: wlp8s0
+  provisioning_pci_id: 8086:15f3
+  provisioning_loader: legacy
+ansible:
+  user: ai-forge
+inference_profile: muse-glimmer-30b
+runtime_profile: llama-b10612-daedalus-01-sm86
+profiles:
+- ubuntu-ai-node
+- coding-agent
