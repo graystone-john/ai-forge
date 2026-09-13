@@ -84,7 +84,11 @@ def init_machine(family):
         if match:
             numbers.append(int(match.group(1)))
 
-    generation = max(numbers, default=0) + 1
+    generation = 1
+    used = set(numbers)
+    while generation in used:
+        generation += 1
+
     name = f"{family}-{generation:02d}"
 
     if len(name) > 63:
