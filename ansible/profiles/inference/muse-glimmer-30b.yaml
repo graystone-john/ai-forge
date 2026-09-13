@@ -8,7 +8,7 @@ inference:
   operational_home: /home/daedalus
 
 llama_runtime:
-  installer: "/home/nispoe/graystone/ai-stores/vault/huggingface/buckets/ggml-org/install.sh/installers/cccdfcbd1b55bf6003ac3037588c9f5b3b79aa0a75fe991e97bb218ccdb55e4d/install-offline.sh"
+  installer: "{{ playbook_dir }}/../../../ai-stores/vault/huggingface/buckets/ggml-org/install.sh/installers/cccdfcbd1b55bf6003ac3037588c9f5b3b79aa0a75fe991e97bb218ccdb55e4d/install-offline.sh"
   installer_checksum: "b5e039ce0789737d6798f4f0572aac081a8dfce0390402a945004027430f9439"
   version: "b10612"
   repository: "http://10.10.10.1:81/ai-stores/vault/huggingface/buckets/ggml-org/install.sh/releases"
