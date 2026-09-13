@@ -35,8 +35,10 @@ def main():
     parser.add_argument("--workload", choices=("inference", "hermes"),
                         default="inference")
     args = parser.parse_args()
-    if args.workload == "hermes" and args.machine != "daedalus-01":
-        parser.error("Hermes v1 supports daedalus-01 only")
+    if args.workload == "hermes" and args.machine not in (
+        "daedalus-01", "daedalus-02"
+    ):
+        parser.error("Hermes supports daedalus-01 and daedalus-02 only")
     if args.shelly:
         import ipaddress
         args.shelly = str(ipaddress.IPv4Address(args.shelly))

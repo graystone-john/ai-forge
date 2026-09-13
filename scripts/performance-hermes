@@ -83,8 +83,8 @@ def main():
     if not ip:
         raise SystemExit("Missing provisioning_ip")
     # This first workload uses Daedalus's verified operational identity.
-    if machine != "daedalus-01":
-        raise SystemExit("This v1 workload currently supports daedalus-01 only")
+    if machine not in ("daedalus-01", "daedalus-02"):
+        raise SystemExit("This workload supports daedalus-01 and daedalus-02 only")
     subprocess.run(
         [str(ROOT / "scripts/check-machine"), machine], check=True
     )
