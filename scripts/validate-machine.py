@@ -3,6 +3,8 @@
 from pathlib import Path
 import sys
 import yaml
+from pxe_policy import identity
+from disk_resolver import validate_generated
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,6 +19,7 @@ userdata_file = ROOT / "generated" / machine_name / "user-data"
 provision_file = ROOT / "generated" / machine_name / "provision.ipxe"
 
 machine = yaml.safe_load(machine_file.read_text())
+identity(machine)
 userdata = yaml.safe_load(userdata_file.read_text())
 
 a = userdata["autoinstall"]
@@ -49,24 +52,7 @@ if not any(
         "Autoinstall does not explicitly enable ssh.service"
     )
 
-expected_serial = machine["hardware"]["os_disk"]["udev_serial"]
-
-disks = [
-    item for item in a["storage"]["config"]
-    if item.get("type") == "disk"
-]
-
-if len(disks) != 1:
-    raise RuntimeError(
-        f"Expected exactly one installation disk, found {len(disks)}"
-    )
-
-actual_serial = disks[0]["match"]["serial"]
-
-if actual_serial != expected_serial:
-    raise RuntimeError(
-        f"Disk mismatch: machine={expected_serial}, autoinstall={actual_serial}"
-    )
+validate_generated(a, machine["hardware"]["os_disk"])
 
 provision = provision_file.read_text()
 
@@ -82,6 +68,6 @@ print(f"Architecture:  {machine['architecture']}")
 print(f"Hostname:      {a['identity']['hostname']}")
 print(f"OS disk model:       {machine['hardware']['os_disk']['model']}")
 print(f"Hardware serial:     {machine['hardware']['os_disk']['serial']}")
-print(f"Installer udev serial:{machine['hardware']['os_disk']['udev_serial']}")
+print("Installer disk: resolved by hardware identity before storage changes")
 print("Disk wipe:     ENABLED")
 print("Autoinstall:   ENABLED")

@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Copy an SSD report into a machine folder and fill draft disk fields."""
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import tempfile
+import yaml
+
+def fail(message):
+    raise SystemExit(f"ERROR: {message}")
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("machine")
+    parser.add_argument("report", type=Path)
+    args = parser.parse_args()
+
+    if not re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", args.machine):
+        fail("Invalid machine name.")
+
+    root = Path(__file__).resolve().parents[1]
+    directory = root / "machines" / args.machine
+    draft = directory / "machine.yaml.example"
+    if (directory / "machine.yaml").exists():
+        fail("Machine is active; only inactive drafts can be updated.")
+    if not draft.is_file():
+        fail(f"Draft not found: {draft}")
+
+    raw = args.report.read_bytes()
+    report = raw.decode("utf-8")
+    if "ERROR:" in report or "USB enclosure detected." in report:
+        fail("Report contains an error or USB enclosure identifiers.")
+
+    def field(pattern):
+        matches = re.findall(pattern, report, re.MULTILINE)
+        if len(matches) != 1 or not matches[0].strip():
+            fail(f"Missing or ambiguous field: {pattern}")
+        return matches[0].strip()
+
+    device = field(r"^Device: (.+)$")
+    if not re.fullmatch(r"/dev/nvme\d+n\d+", device):
+        fail("This version requires a native NVMe report.")
+
+    model = field(r"^(?:model:|Model Number:)[ \t]*(.+)$")
+    serial = field(r"^(?:serial:|Serial Number:)[ \t]*(.+)$")
+    udev_serial = field(r"^ID_SERIAL=(.+)$")
+
+    if not serial.strip("0"):
+        fail("Invalid all-zero hardware serial.")
+    if serial != field(r"^ID_SERIAL_SHORT=(.+)$"):
+        fail("Hardware and udev serials disagree.")
+    if model != field(r"^ID_MODEL=(.+)$"):
+        fail("Hardware and udev models disagree.")
+    if not udev_serial.endswith("_" + serial):
+        fail("Installer identifier does not match the hardware serial.")
+    if f"/dev/disk/by-id/nvme-{udev_serial}" not in report.splitlines():
+        fail("Matching native NVMe by-id link is missing.")
+
+    values = dict(model=model, serial=serial, udev_serial=udev_serial)
+    placeholders = dict(
+        model="OS_DISK_MODEL",
+        serial="OS_DISK_SERIAL",
+        udev_serial="OS_DISK_UDEV_SERIAL",
+    )
+    original = draft.read_text()
+    data = yaml.safe_load(original)
+    if data["name"] != args.machine:
+        fail("Machine name does not match the draft.")
+
+    disk = data["hardware"]["os_disk"]
+    for key, value in values.items():
+        if disk.get(key) not in (placeholders[key], value):
+            fail(f"Existing disk {key} conflicts; no update performed.")
+
+    section = re.search(
+        r"(?m)^  os_disk:[ \t]*\n(?:(?:[ \t]+[^\n]*|)\n)*",
+        original,
+    )
+    if not section:
+        fail("Expected os_disk section not found.")
+
+    replacement = section.group()
+    for key, value in values.items():
+        replacement, count = re.subn(
+            rf"(?m)^    {key}:[^\n]*$",
+            lambda m, k=key, v=value: f"    {k}: {json.dumps(v)}",
+            replacement,
+        )
+        if count != 1:
+            fail(f"Expected exactly one os_disk.{key} line.")
+
+    updated = original[:section.start()] + replacement + original[section.end():]
+    data["hardware"]["os_disk"].update(values)
+    if yaml.safe_load(updated) != data:
+        fail("Unexpected configuration changes detected.")
+
+    reports = directory / "hardware-reports"
+    reports.mkdir(exist_ok=True)
+    destination = reports / args.report.name
+    if destination.exists():
+        if destination.read_bytes() != raw:
+            fail("Different report already exists with that filename.")
+    else:
+        with destination.open("xb") as stream:
+            stream.write(raw)
+    if destination.read_bytes() != raw:
+        fail("Report copy verification failed.")
+
+    if updated != original:
+        fd, temporary = tempfile.mkstemp(prefix=".ssd-import-", dir=directory)
+        try:
+            with os.fdopen(fd, "w") as stream:
+                stream.write(updated)
+            os.chmod(temporary, draft.stat().st_mode & 0o777)
+            os.replace(temporary, draft)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+    print(f"Report copied and verified: {destination}")
+    print(f"Draft updated: {draft}")
+    for key, value in values.items():
+        print(f"  {key}: {value}")
+    print("Machine remains unregistered. No disk operations or commits performed.")
+
+if __name__ == "__main__":
+    main()

@@ -6,6 +6,7 @@ import base64
 import shutil
 
 import yaml
+from disk_resolver import early_command, SENTINEL
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -97,7 +98,8 @@ def main():
         "ubuntu_iso_url": forge["images"]["ubuntu"][ubuntu_version]["iso_url"],
         "username": forge["defaults"]["username"],
         "password_hash": secrets["password_hash"],
-        "os_disk_serial": machine["hardware"]["os_disk"]["udev_serial"],
+        "os_disk_serial": SENTINEL,
+        "disk_resolution_command": early_command(machine["hardware"]["os_disk"]),
         "ssh_authorized_key": ssh_authorized_key,
         "provisioning_mac": machine["network"]["provisioning_mac"],
         "boot_control_b64": boot_control_b64,

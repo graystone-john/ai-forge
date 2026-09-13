@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+
+inspect_main() {
+# Read-only hardware identification for AI Forge.
+set -euo pipefail
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    echo "Usage: $0 /dev/sdX"
+    echo "       $0 /dev/nvme0n1"
+    echo "Reports machine hardware, network interfaces and the selected OS disk."
+    exit 0
+fi
+
+if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 <whole-disk-device>" >&2
+    exit 2
+fi
+
+for tool in readlink lsblk udevadm find; do
+    command -v "$tool" >/dev/null || {
+        echo "ERROR: Required command not found: $tool" >&2
+        exit 3
+    }
+done
+
+DEVICE="$(readlink -f -- "$1")"
+if [[ ! -b "$DEVICE" ]]; then
+    echo "ERROR: Not a block device: $DEVICE" >&2
+    exit 2
+fi
+
+if [[ "$(lsblk -dnro TYPE "$DEVICE")" != "disk" ]]; then
+    echo "ERROR: Select a whole disk, not a partition: $DEVICE" >&2
+    exit 2
+fi
+
+PRIVILEGE=()
+if [[ $EUID -ne 0 ]]; then
+    command -v sudo >/dev/null || {
+        echo "ERROR: Run as root or install sudo." >&2
+        exit 3
+    }
+    PRIVILEGE=(sudo)
+fi
+
+
+echo "=== Machine architecture ==="
+uname -m
+
+echo
+echo "=== Motherboard ==="
+for field in board_vendor board_name board_version product_name; do
+    path="/sys/class/dmi/id/$field"
+    if [[ -r "$path" ]]; then
+        printf '%s: ' "$field"
+        cat "$path"
+    fi
+done
+
+echo
+echo "=== CPU ==="
+if command -v lscpu >/dev/null; then
+    LC_ALL=C lscpu
+else
+    cat /proc/cpuinfo
+fi
+
+echo
+echo "=== Memory available to Linux ==="
+awk '/^MemTotal:/ {print}' /proc/meminfo
+
+echo
+echo "=== Installed memory modules ==="
+if command -v dmidecode >/dev/null; then
+    "${PRIVILEGE[@]}" dmidecode --type 17 ||
+        echo "NOTE: Installed memory information unavailable."
+else
+    echo "NOTE: dmidecode unavailable; MemTotal is usable RAM, not installed capacity."
+fi
+
+echo
+echo "=== Graphics devices ==="
+if command -v lspci >/dev/null; then
+    LC_ALL=C lspci -Dnn |
+        awk '/VGA compatible controller|3D controller|Display controller/'
+else
+    echo "NOTE: lspci unavailable; reporting PCI numeric identifiers."
+    for pci in /sys/bus/pci/devices/*; do
+        [[ -r "$pci/class" ]] || continue
+        class="$(cat "$pci/class")"
+        [[ "$class" == 0x03* ]] || continue
+        printf 'PCI device: %s\n' "${pci##*/}"
+        for field in vendor device subsystem_vendor subsystem_device; do
+            printf '%s: ' "$field"
+            cat "$pci/$field"
+        done
+    done
+fi
+
+echo
+echo "=== Physical network interfaces ==="
+for nic in /sys/class/net/*; do
+    [[ -e "$nic/device" ]] || continue
+    printf '\nInterface: %s\n' "${nic##*/}"
+    if [[ -d "$nic/wireless" ]]; then
+        echo "Kind: wireless"
+    else
+        echo "Kind: non-wireless"
+    fi
+    for field in address addr_assign_type operstate; do
+        if [[ -r "$nic/$field" ]]; then
+            printf '%s: ' "$field"
+            cat "$nic/$field"
+        fi
+    done
+    printf 'Device path: %s\n' "$(readlink -f "$nic/device")"
+    if [[ "$(basename "$(readlink -f "$nic/device/subsystem")")" == "pci" ]]; then
+        for field in vendor device; do
+            if [[ -r "$nic/device/$field" ]]; then
+                printf 'PCI %s: ' "$field"
+                cat "$nic/device/$field"
+            fi
+        done
+    fi
+    if command -v ethtool >/dev/null; then
+        "${PRIVILEGE[@]}" ethtool -P "${nic##*/}" ||
+            echo "NOTE: Permanent MAC unavailable."
+    fi
+done
+echo
+echo "NOTE: Interface address may be randomized; verify the provisioning port."
+echo
+
+printf 'Device: %s\n\n' "$DEVICE"
+
+echo "=== Disk and partitions ==="
+lsblk -o NAME,TRAN,SIZE,MODEL,SERIAL,FSTYPE,LABEL,MOUNTPOINTS "$DEVICE"
+
+echo
+echo "=== Hardware identity (smartctl) ==="
+smart_status=0
+if command -v smartctl >/dev/null; then
+    "${PRIVILEGE[@]}" smartctl -i "$DEVICE" || smart_status=$?
+else
+    echo "smartctl unavailable; using native Linux identity."
+    for field in model serial firmware_rev; do
+        path="/sys/class/block/${DEVICE##*/}/device/$field"
+        if [[ -r "$path" ]]; then
+            printf '%s: ' "$field"
+            cat "$path"
+        fi
+    done
+fi
+
+echo
+echo "=== NVMe namespace identity ==="
+namespace_found=0
+for path in "/sys/class/block/${DEVICE##*/}/nsid" "/sys/class/block/${DEVICE##*/}/device/nsid"; do
+    if [[ -r "$path" ]]; then
+        printf 'namespace_id: '
+        cat "$path"
+        namespace_found=1
+        break
+    fi
+done
+if [[ "$namespace_found" -eq 0 ]]; then
+    echo "NOTE: Namespace ID unavailable."
+fi
+echo
+echo "=== Operating-system identity (udev) ==="
+properties="$(udevadm info --query=property --name="$DEVICE")"
+while IFS= read -r line; do
+    case "$line" in
+        ID_MODEL=*|ID_SERIAL=*|ID_SERIAL_SHORT=*|ID_WWN=*|ID_BUS=*)
+            printf '%s\n' "$line"
+            ;;
+    esac
+done <<< "$properties"
+
+echo
+echo "=== Current /dev/disk/by-id links ==="
+if [[ -d /dev/disk/by-id ]]; then
+    find -L /dev/disk/by-id -maxdepth 1 -samefile "$DEVICE" -print
+fi
+
+echo
+echo "=== Provisioning guidance ==="
+transport="$(lsblk -dnro TRAN "$DEVICE")"
+if [[ "$transport" == "usb" ]]; then
+    echo "USB enclosure detected."
+    echo "udev serial, WWN and by-id links may identify the enclosure."
+    echo "Use smartctl's hardware serial as evidence of the actual drive."
+    echo "Recheck native udev identifiers after installing the drive internally."
+else
+    echo "Compare the hardware serial with the udev identifiers before registration."
+fi
+echo "No machine configuration or disk contents were changed."
+
+if (( smart_status != 0 )); then
+    printf '\nsmartctl returned status %s; review its output above.\n' "$smart_status" >&2
+fi
+exit "$smart_status"
+
+}
+
+# Automatic report capture
+set -euo pipefail
+
+# Help and usage errors do not create reports.
+if [[ $# -ne 1 || "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+    inspect_main "$@"
+    exit $?
+fi
+
+report_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+report="$(mktemp "$report_dir/hardware-report-$(date +%Y%m%d-%H%M%S)-XXXXXX.txt")" || {
+    echo "ERROR: Cannot create report beside the script." >&2
+    exit 1
+}
+
+set +e
+(
+    set -euo pipefail
+    printf 'Captured: %s\nHost: %s\n\n' "$(date -Is)" "$(hostname)"
+    inspect_main "$@"
+) 2>&1 | tee "$report"
+result=$?
+set -e
+
+sync "$report"
+printf '\nReport saved: %s\n' "$report"
+if (( result != 0 )); then
+    echo "Inspection reported an error; review the saved report." >&2
+fi
+exit "$result"

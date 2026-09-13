@@ -46,6 +46,10 @@ autoinstall:
     authorized-keys:
       - "{{ ssh_authorized_key }}"
 
+  early-commands:
+    - |
+{{ disk_resolution_command | indent(6, true) }}
+
   storage:
     config:
       - id: disk-os
@@ -154,7 +158,7 @@ autoinstall:
     - curtin in-target --target=/target -- visudo -cf /etc/sudoers.d/ai-forge-boot-control
 
     # AI Forge unattended Ansible management identity
-    - curtin in-target --target=/target -- useradd --create-home --shell /bin/bash --comment "AI Forge automation" ai-forge
+    - curtin in-target --target=/target -- sh -c 'id -u ai-forge >/dev/null 2>&1 || useradd --create-home --shell /bin/bash --comment "AI Forge automation" ai-forge'
 
     - curtin in-target --target=/target -- passwd -l ai-forge
 
@@ -184,6 +188,9 @@ autoinstall:
       output:
         all: ">> /var/log/cloud-init-output.log"
       ssh_quiet_keygen: true
+      no_ssh_fingerprints: true
+      ssh:
+        emit_keys_to_console: false
       EOF
 
     - chown root:root /target/etc/cloud/cloud.cfg.d/99-ai-forge-console.cfg
