@@ -17,7 +17,7 @@ if [[ ! -f "$MACHINE_FILE" ]]; then
 fi
 
 readarray -t INFO < <(
-    python3 - "$MACHINE_FILE" <<'PY'
+    python3 - "$MACHINE_FILE" "$ROOT/config/forge.yaml" <<'PY'
 import sys
 import yaml
 
@@ -28,12 +28,14 @@ network = machine.get("network", {})
 
 print(network.get("provisioning_ip", ""))
 print(network.get("provisioning_mac", ""))
+with open(sys.argv[2], encoding="utf-8") as f:
+    print(yaml.safe_load(f)["defaults"]["username"])
 PY
 )
 
 IP="${INFO[0]}"
 MAC="${INFO[1]}"
-SSH_USER="nispoe"
+SSH_USER="${INFO[2]}"
 SSH_KEY="$ROOT/secrets/ssh/id_ed25519_ai_forge"
 
 if [[ -z "$IP" ]]; then

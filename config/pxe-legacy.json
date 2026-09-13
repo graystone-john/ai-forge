@@ -1,0 +1,5 @@
+{
+  "deb_sha256": "30ff9a37be08193f018436a5611e357b2e065ae251155b7f95a1d4bdd4d2ad39",
+  "efi_sha256": "079471ff9733ebe350839b9ee97d208309d06cbeeb3d309f141a68c433ab300c",
+  "deb": "vault/linux/ubuntu/apt/pool/main/ipxe_1.21.1+git-20220113.fbbdc3926-0ubuntu2_all.deb"
+}

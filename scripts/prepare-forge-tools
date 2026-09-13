@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Update an existing FAT32 FORGE-TOOLS USB without formatting it.
+set -euo pipefail
+
+ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+SOURCE="$ROOT/scripts/inspect-hardware"
+
+if [[ $# -gt 1 || "${1:-}" == "--help" ]]; then
+    echo "Usage: $0 [whole-usb-disk]"
+    echo "Updates an existing FORGE-TOOLS USB; preserves existing reports."
+    exit 0
+fi
+
+test -f "$SOURCE" || {
+    echo "ERROR: Collector missing: $SOURCE" >&2
+    exit 1
+}
+bash -n "$SOURCE"
+
+# Require exactly one partition bearing the tools label.
+mapfile -t partitions < <(
+    lsblk -rpn -o NAME,LABEL |
+        awk '$2 == "FORGE-TOOLS" {print $1}'
+)
+if [[ ${#partitions[@]} -ne 1 ]]; then
+    echo "ERROR: Attach exactly one FORGE-TOOLS USB." >&2
+    exit 1
+fi
+partition="${partitions[0]}"
+
+[[ "$(lsblk -dnro TYPE "$partition")" == "part" ]]
+[[ "$(lsblk -dnro FSTYPE "$partition")" == "vfat" ]]
+parent="$(lsblk -dnro PKNAME "$partition")"
+disk="$(readlink -f "/dev/${parent##*/}")"
+[[ "$(lsblk -dnro TYPE "$disk")" == "disk" ]]
+[[ "$(lsblk -dnro TRAN "$disk")" == "usb" ]]
+
+if [[ $# -eq 1 && "$(readlink -f -- "$1")" != "$disk" ]]; then
+    echo "ERROR: Selected disk does not contain the FORGE-TOOLS partition." >&2
+    exit 1
+fi
+
+echo "Updating this USB:"
+lsblk -o NAME,TRAN,SIZE,MODEL,SERIAL,FSTYPE,LABEL,MOUNTPOINTS "$disk"
+
+if ! findmnt -rn -S "$partition" >/dev/null; then
+    udisksctl mount -b "$partition"
+fi
+
+mapfile -t mounts < <(findmnt -rn -S "$partition" -o TARGET)
+if [[ ${#mounts[@]} -ne 1 ]]; then
+    echo "ERROR: Expected exactly one mount point." >&2
+    exit 1
+fi
+usb_mount="${mounts[0]}"
+mountpoint -q "$usb_mount"
+
+temporary="$(mktemp "$usb_mount/.inspect-hardware-XXXXXX")"
+trap 'rm -f -- "$temporary"' EXIT
+cp -- "$SOURCE" "$temporary"
+cmp -- "$SOURCE" "$temporary"
+mv -f -- "$temporary" "$usb_mount/inspect-hardware"
+cmp -- "$SOURCE" "$usb_mount/inspect-hardware"
+sync
+
+printf '\nCollector copied and verified: %s/inspect-hardware\n' "$usb_mount"
+echo "Existing reports preserved."
+echo "On the target: open a terminal in the USB folder and run:"
+echo "  bash inspect-hardware /dev/nvme0n1"

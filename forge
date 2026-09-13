@@ -5,14 +5,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ $# -lt 1 ]]; then
     echo "Usage:"
-    echo "  ./forge machines"
+    echo "  ./forge machine [list|validate]"
     echo "  ./forge status <machine>"
     echo "  ./forge wait <machine> [--for ssh|offline] [--timeout seconds] [--interval seconds]"
     echo "  ./forge wake <machine>"
     echo "  ./forge deploy <machine>"
     echo "  ./forge boot <machine> {status|pxe-next|clear-next|reboot|poweroff}"
     echo "  ./forge chat <machine>"
-    echo "  ./forge provision <machine>"
+    echo "  ./forge provision <machine> [--first-install]"
     exit 2
 fi
 
@@ -20,8 +20,8 @@ COMMAND="$1"
 shift
 
 case "$COMMAND" in
-    machines)
-        exec "$ROOT/scripts/machines.py" list
+    machine|machines)
+        exec "$ROOT/scripts/machine.py" "$@"
         ;;
 
     status)
@@ -73,18 +73,18 @@ case "$COMMAND" in
         ;;
 
     provision)
-        if [[ $# -ne 1 ]]; then
-            echo "Usage: ./forge provision <machine>"
+        if [[ $# -lt 1 || $# -gt 2 ]]; then
+            echo "Usage: ./forge provision <machine> [--first-install]"
             exit 2
         fi
-        exec "$ROOT/scripts/provision-machine" "$1"
+        exec "$ROOT/scripts/provision-machine" "$@"
         ;;
 
     *)
         echo "ERROR: Unknown command: $COMMAND"
         echo
         echo "Available commands:"
-        echo "  machines"
+        echo "  machine [list|validate]"
         echo "  status <machine>"
         echo "  wait <machine> [--for ssh|offline] [--timeout seconds] [--interval seconds]"
         echo "  wake <machine>"

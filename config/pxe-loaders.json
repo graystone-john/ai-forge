@@ -1,0 +1,13 @@
+{
+  "daedalus-02": {
+    "binary_sha256": "36ce81f7b9023f5d9f19197fd6ed3614842e8f62f7fabc40b10e7e56438532b6",
+    "build": "vault/tools/ipxe/builds/daedalus-02-native-v1",
+    "identity": {
+      "loader": "aqc1xx",
+      "mac": "d8:5e:d3:0e:b8:3c",
+      "name": "daedalus-02",
+      "pci_id": "1d6a:14c0"
+    },
+    "manifest_sha256": "05517e31f42d38ff5c58656a1881fbfb10941152629c297078159c0783727052"
+  }
+}

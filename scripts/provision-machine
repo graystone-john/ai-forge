@@ -3,12 +3,25 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-if [[ $# -ne 1 ]]; then
-    echo "Usage: $0 <machine>"
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+    echo "Usage: $0 <machine> [--first-install]" >&2
     exit 2
 fi
 
+FIRST_INSTALL=0
+if [[ $# -eq 2 ]]; then
+    if [[ "$2" != "--first-install" ]]; then
+        echo "ERROR: Unknown option: $2" >&2
+        exit 2
+    fi
+    FIRST_INSTALL=1
+fi
+
 MACHINE="$1"
+if [[ ! "$MACHINE" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)*$ ]]; then
+    echo "ERROR: Invalid machine name." >&2
+    exit 2
+fi
 MACHINE_FILE="$ROOT/machines/$MACHINE/machine.yaml"
 
 ARMED=0
@@ -73,20 +86,31 @@ echo "IP:      $IP"
 echo "MAC:     $MAC"
 echo
 
-echo "Checking machine readiness..."
+if [[ "$FIRST_INSTALL" -eq 1 ]]; then
+    echo "First installation: target will be booted manually through UEFI PXE."
+else
+    echo "Checking machine readiness..."
 
-if ! "$ROOT/scripts/check-machine" "$MACHINE"; then
-    echo
-    echo "ERROR: $MACHINE is not SSH-ready." >&2
-    echo "Run:"
-    echo "  ./scripts/wake-machine $MACHINE"
-    exit 10
+    if ! "$ROOT/scripts/check-machine" "$MACHINE"; then
+        echo
+        echo "ERROR: $MACHINE is not SSH-ready." >&2
+        echo "Run:"
+        echo "  ./scripts/wake-machine $MACHINE"
+        exit 10
+    fi
 fi
 
 echo
 echo "Preparing provisioning configuration..."
 
 "$ROOT/scripts/deploy-machine" "$MACHINE"
+
+if [[ "$FIRST_INSTALL" -eq 1 ]]; then
+    echo
+    echo "Generating and deploying DHCP reservations..."
+    "$ROOT/scripts/generate-dnsmasq.py"
+    "$ROOT/scripts/deploy-dnsmasq"
+fi
 
 echo
 echo "Provisioning plan:"
@@ -95,6 +119,27 @@ echo "  IP:       $IP"
 echo "  MAC:      $MAC"
 echo "  Action:   WIPE AND REINSTALL configured OS disk"
 echo
+
+if [[ "$FIRST_INSTALL" -eq 1 ]]; then
+    echo "Arming one-shot provisioning..."
+    ARMED=1
+    "$ROOT/scripts/set-mode" "$MACHINE" provision
+
+    echo
+    echo "Ready for manual UEFI IPv4 PXE boot."
+    echo "Start $MACHINE on the provisioning Ethernet network."
+    echo "The next authorized provisioning boot will WIPE AND REINSTALL its configured OS disk."
+    echo
+    echo "To cancel before that boot:"
+    echo "  ./scripts/set-mode $MACHINE normal"
+    echo
+    echo "After starting PXE, wait for the installed system:"
+    echo "  ./forge wait $MACHINE --for ssh --timeout 1200"
+
+    # Intentionally retain the armed state after this successful handoff.
+    ARMED=0
+    exit 0
+fi
 
 echo "Setting one-time PXE boot..."
 

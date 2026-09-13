@@ -1,0 +1,376 @@
+#!/usr/bin/python3
+"""Per-machine native iPXE preparation and transactional DHCP deployment."""
+import argparse
+import datetime
+import fcntl
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+import sys
+from pxe_policy import identity, read_inventory, render, bindings
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def run(argv, **kw):
+    return subprocess.run([str(v) for v in argv], check=True, **kw)
+
+
+def sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def atomic(path, data):
+    path = Path(path)
+    if path.is_symlink():
+        raise ValueError(f'Refusing symlink {path}')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp = tempfile.mkstemp(dir=path.parent, prefix='.' + path.name)
+    try:
+        with os.fdopen(fd, 'wb') as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(temp, path.stat().st_mode & 0o777 if path.exists() else 0o644)
+        os.replace(temp, path)
+    finally:
+        if os.path.exists(temp):
+            os.unlink(temp)
+
+
+def put(path, obj):
+    atomic(path, (json.dumps(obj, indent=2, sort_keys=True) + '\n').encode())
+
+
+def artifacts():
+    path = ROOT.parent / 'ai-stores/scripts/ipxe-artifacts'
+    loader = importlib.machinery.SourceFileLoader('ipxe_artifacts', str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def machine(name):
+    matches = [m for m in read_inventory(ROOT) if m['name'] == name]
+    if len(matches) != 1:
+        raise ValueError('Unknown machine')
+    return matches[0]
+
+
+def embed(i, server):
+    # All interfaces are checked; a PCI card insertion must not silently change
+    # which port supplies the controller request MAC. No broad DHCP fallback.
+    lines = ['#!ipxe', 'echo AI Forge - native provisioning', '']
+    for n in range(32):
+        lines.append(f"iseq ${{net{n}/mac}} {i['mac']} && goto nic{n} ||")
+    lines.extend(['echo Configured provisioning port not found', 'goto failed'])
+    for n in range(32):
+        lines.extend([f':nic{n}', f'dhcp --configurator dhcp --timeout 20000 net{n} || goto failed',
+                      f'chain --autofree http://{server}/forge/boot-mac?mac=${{net{n}/mac}} || goto failed', 'exit'])
+    lines.extend([':failed', 'echo Forge handoff failed. Photograph this screen.', 'ifstat ||', ':hold', 'sleep 3600 ||', 'goto hold', ''])
+    return '\n'.join(lines)
+
+
+def request(args):
+    import ipaddress
+    import yaml
+    i = identity(machine(args.machine))
+    if i['loader'] != 'aqc1xx':
+        raise ValueError('This machine does not require a native build')
+    cfg = yaml.safe_load((ROOT / 'config/forge.yaml').read_text())
+    server = str(ipaddress.IPv4Address(cfg['provisioning']['server_ip']))
+    p = Path(args.output)
+    if p.exists():
+        raise ValueError('Request output already exists')
+    put(p, {'schema': 1, 'identity': i, 'server': server})
+    print(f'Build request saved: {p}')
+
+
+def build(args):
+    import ipaddress
+    a = artifacts()
+    a.require_noble_arm()
+    a.offline()
+    snap, data = a.load_snapshot(args.snapshot, acquired=True)
+    a.check_installed(data['packages'])
+    r = json.loads(Path(args.request).read_text())
+    i = r['identity']
+    if r.get('schema') != 1 or identity({'name': i['name'], 'architecture': 'amd64', 'network': {
+            'provisioning_mac': i['mac'], 'provisioning_pci_id': i['pci_id'], 'provisioning_loader': i['loader']}}) != i or i['loader'] != 'aqc1xx':
+        raise ValueError('Invalid native build request')
+    server = str(ipaddress.IPv4Address(r['server']))
+    dest = Path(args.output).resolve()
+    if dest.exists():
+        raise ValueError('Build output already exists')
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix=dest.name + '.partial-', dir=dest.parent))
+    try:
+        src = work / 'source'
+        src.mkdir()
+        a.extract_source(snap / 'acquired/upstream/ipxe-source.tar.gz', src)
+        recipe = snap / 'capture/recipe'
+        a.run(['patch', '--batch', '--forward', '-p1', '-i', recipe / 'source.patch'], cwd=src)
+        shutil.copytree(recipe / 'local', src / 'src/config/local', dirs_exist_ok=True)
+        put(work / 'request.json', r)
+        (work / 'forge.ipxe').write_text(embed(i, server))
+        shutil.copy2(__file__, work / 'build-script.py')
+        shutil.copy2(Path(__file__).with_name('pxe_policy.py'), work / 'pxe_policy.py')
+        shutil.copy2(ROOT.parent / 'ai-stores/scripts/ipxe-artifacts', work / 'ipxe-artifacts.py')
+        env = {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C',
+               'SOURCE_DATE_EPOCH': str(data['commit_epoch']), 'GIT_CEILING_DIRECTORIES': str(src),
+               'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': '/dev/null'}
+        print('Building per-machine Forge loader offline...', flush=True)
+        with (work / 'build.log').open('wb') as log:
+            run(['make', '-C', src / 'src', f'-j{args.jobs}', 'CROSS=x86_64-linux-gnu-',
+                 data['target'], f'EMBED={work / "forge.ipxe"}'], env=env, stdout=log, stderr=subprocess.STDOUT)
+        binary = work / 'ipxe-native-forge.efi'
+        shutil.copy2(src / 'src' / data['target'], binary)
+        if not a.efi_x64(binary):
+            raise ValueError('Not an x86-64 EFI application')
+        shutil.rmtree(src)
+        put(work / 'build.json', {'schema': 'forge-machine-ipxe-v1', 'identity': i, 'server': server,
+            'commit': a.COMMIT, 'binary_sha256': sha(binary),
+            'capture_manifest_sha256': sha(snap / 'capture/checksums.json'),
+            'acquisition_manifest_sha256': sha(snap / 'acquired/checksums.json'),
+            'hardware_validation': 'pending', 'network': 'isolated', 'jobs': args.jobs})
+        a.seal(work)
+        os.rename(work, dest)
+    except BaseException:
+        print(f'Incomplete build and log retained: {work}', file=sys.stderr)
+        raise
+    print(f'Build complete: {dest}. Hardware validation pending.')
+
+
+def check_build(path, i):
+    a = artifacts()
+    path = Path(path).resolve()
+    a.verify(path)
+    b = json.loads((path / 'build.json').read_text())
+    binary = path / 'ipxe-native-forge.efi'
+    if b.get('schema') != 'forge-machine-ipxe-v1' or b.get('identity') != i or b.get('commit') != a.COMMIT:
+        raise ValueError('Build identity, schema or commit mismatch')
+    if sha(binary) != b['binary_sha256'] or not a.efi_x64(binary):
+        raise ValueError('Native EFI verification failed')
+    if (path / 'forge.ipxe').read_text() != embed(i, b['server']):
+        raise ValueError('Embedded script does not match machine identity')
+    import yaml
+    server = str(yaml.safe_load((ROOT / 'config/forge.yaml').read_text())['provisioning']['server_ip'])
+    if b['server'] != server:
+        raise ValueError('Build targets a different controller address')
+    return b
+
+
+def select(args):
+    i = identity(machine(args.machine))
+    p = Path(args.build).resolve()
+    b = check_build(p, i)
+    # Store paths relative to the ai-stores root; refuse arbitrary external builds.
+    relative = p.relative_to((ROOT.parent / 'ai-stores').resolve())
+    registry = bindings(ROOT)
+    registry[i['name']] = {'identity': i, 'build': str(relative), 'binary_sha256': b['binary_sha256'],
+                          'manifest_sha256': sha(p / 'checksums.json')}
+    put(ROOT / 'config/pxe-loaders.json', registry)
+    print('Build selected in repository configuration only. Run normal provisioning to deploy it.')
+
+
+def native_files():
+    ms = read_inventory(ROOT)
+    registry = bindings(ROOT)
+    result = {}
+    for m in ms:
+        i = identity(m)
+        if i['loader'] != 'aqc1xx':
+            continue
+        b = registry.get(i['name'])
+        if not b or b.get('identity') != i:
+            raise ValueError(f"No matching build selected for {i['name']}")
+        store = (ROOT.parent / 'ai-stores').resolve()
+        p = (store / b['build']).resolve()
+        p.relative_to(store)
+        actual = check_build(p, i)
+        if sha(p / 'checksums.json') != b['manifest_sha256'] or actual['binary_sha256'] != b['binary_sha256']:
+            raise ValueError('Selected build changed')
+        result['ipxe-native-' + b['binary_sha256'] + '.efi'] = (p / 'ipxe-native-forge.efi').read_bytes()
+    return ms, registry, result
+
+
+def route_check(text):
+    active = [s.strip() for s in text.splitlines() if s.strip() and not s.lstrip().startswith('#')]
+    expected = 'dhcp-boot=tag:efi64,tag:!ipxe,tag:!forge-native,ipxe.efi'
+    first = [s for s in active if s.startswith('dhcp-boot=') and 'tag:efi64' in s and 'tag:!ipxe' in s]
+    if first != [expected] or any('daedalus02-snp' in s for s in active):
+        raise ValueError('Base DHCP routing is not the integrated routing policy')
+
+
+def deploy(args):
+    if os.geteuid() != 0:
+        raise ValueError('deploy-dhcp requires sudo')
+    ms, registry, files = native_files()
+    expected = render(ms, registry)
+    generated = ROOT / 'generated/dnsmasq/machines.conf'
+    if generated.read_text() != expected:
+        raise ValueError('Generated DHCP reservations are stale; regenerate first')
+    base = ROOT / 'configs/dnsmasq/provisioning.conf'
+    route_check(base.read_text())
+    pins = json.loads((ROOT / 'config/pxe-legacy.json').read_text())
+    deb = ROOT.parent / 'ai-stores' / pins['deb']
+    if sha(deb) != pins['deb_sha256']:
+        raise ValueError('Legacy package checksum mismatch')
+    with tempfile.TemporaryDirectory() as tmp:
+        run(['dpkg-deb', '-x', deb, tmp])
+        efi = Path(tmp) / 'usr/lib/ipxe/ipxe.efi'
+        if sha(efi) != pins['efi_sha256']:
+            raise ValueError('Legacy EFI checksum mismatch')
+        files['ipxe.efi'] = efi.read_bytes()
+    state = ROOT.parent / 'ai-stores/vault/tools/ipxe/deployments'
+    state.mkdir(parents=True, exist_ok=True)
+    with (state / 'inventory-deploy.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        targets = {Path('/etc/dnsmasq.d/provisioning.conf'): base.read_bytes(),
+                   Path('/etc/dnsmasq.d/ai-forge-machines.conf'): generated.read_bytes()}
+        for filename, data in files.items():
+            targets[Path('/srv/pxe/tftp') / filename] = data
+        tx = state / (datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ') + '-inventory')
+        tx.mkdir()
+        record = {'status': 'prepared', 'files': []}
+        for n, (p, data) in enumerate(targets.items()):
+            if p.is_symlink():
+                raise ValueError(f'Refusing symlink {p}')
+            old = p.read_bytes() if p.exists() else None
+            if old is not None:
+                (tx / str(n)).write_bytes(old)
+            record['files'].append({'path': str(p), 'backup': str(n) if old is not None else None,
+                                    'before': hashlib.sha256(old).hexdigest() if old is not None else None,
+                                    'after': hashlib.sha256(data).hexdigest()})
+        put(tx / 'transaction.json', record)
+        try:
+            # Publish binaries before routing them.
+            for p in reversed(list(targets)):
+                atomic(p, targets[p])
+            run(['dnsmasq', '--test'])
+            run(['systemctl', 'restart', 'dnsmasq'])
+            run(['systemctl', 'is-active', '--quiet', 'dnsmasq'])
+            for row in record['files']:
+                if sha(row['path']) != row['after']:
+                    raise ValueError('Deployed checksum mismatch')
+        except BaseException:
+            restore(tx, record)
+            raise
+        record['status'] = 'deployed'
+        put(tx / 'transaction.json', record)
+        print(f'DHCP and verified loaders deployed. Rollback transaction: {tx}')
+        print('Hardware provisioning validation remains pending.')
+
+
+def restore(tx, record):
+    # Verify ALL saved bytes before restoring any file.
+    for row in record['files']:
+        if row['backup'] is not None and sha(tx / row['backup']) != row['before']:
+            raise ValueError('Rollback backup checksum mismatch')
+    for row in record['files']:
+        p = Path(row['path'])
+        if row['backup'] is None:
+            p.unlink(missing_ok=True)
+        else:
+            atomic(p, (tx / row['backup']).read_bytes())
+    run(['dnsmasq', '--test'])
+    run(['systemctl', 'restart', 'dnsmasq'])
+    run(['systemctl', 'is-active', '--quiet', 'dnsmasq'])
+    record['status'] = 'rolled-back'
+    put(tx / 'transaction.json', record)
+
+
+def rollback(args):
+    if os.geteuid() != 0:
+        raise ValueError('rollback requires sudo')
+    state = (ROOT.parent / 'ai-stores/vault/tools/ipxe/deployments').resolve()
+    tx = Path(args.transaction).resolve()
+    if tx.parent != state or not tx.name.endswith('-inventory'):
+        raise ValueError('Not an inventory deployment transaction')
+    with (state / 'inventory-deploy.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        r = json.loads((tx / 'transaction.json').read_text())
+        if r['status'] != 'deployed':
+            raise ValueError('Transaction is not deployed')
+        for row in r['files']:
+            p = Path(row['path'])
+            if p not in (Path('/etc/dnsmasq.d/provisioning.conf'), Path('/etc/dnsmasq.d/ai-forge-machines.conf')) and not (p.parent == Path('/srv/pxe/tftp') and (p.name == 'ipxe.efi' or __import__('re').fullmatch(r'ipxe-native-[0-9a-f]{64}\.efi', p.name))):
+                raise ValueError('Unexpected rollback path')
+            if p.is_symlink() or sha(p) != row['after']:
+                raise ValueError('Deployment changed since transaction; rollback refused')
+            if row['backup'] is not None and not str(row['backup']).isdigit():
+                raise ValueError('Invalid backup path')
+        restore(tx, r)
+    print('Live deployment restored. Repository selection is unchanged; reconcile it before redeploying.')
+
+
+def status(args):
+    ms, registry, files = native_files()
+    expected = render(ms, registry)
+    route_check((ROOT / 'configs/dnsmasq/provisioning.conf').read_text())
+    if Path('/etc/dnsmasq.d/provisioning.conf').read_bytes() != (ROOT / 'configs/dnsmasq/provisioning.conf').read_bytes():
+        raise ValueError('Repository/live base configuration differs')
+    if Path('/etc/dnsmasq.d/ai-forge-machines.conf').read_text() != expected:
+        raise ValueError('Live machine routes differ from inventory')
+    for name, data in files.items():
+        if Path('/srv/pxe/tftp', name).read_bytes() != data:
+            raise ValueError('Deployed native loader mismatch: ' + name)
+    pins = json.loads((ROOT / 'config/pxe-legacy.json').read_text())
+    if sha('/srv/pxe/tftp/ipxe.efi') != pins['efi_sha256']:
+        raise ValueError('Legacy loader checksum mismatch')
+    run(['dnsmasq', '--test'])
+    run(['systemctl', 'is-active', '--quiet', 'dnsmasq'])
+    rows = []
+    for m in ms:
+        i = identity(m)
+        rows.append({'machine': i['name'], 'mac': i['mac'], 'loader': i['loader'],
+                     'sha256': registry[i['name']]['binary_sha256'] if i['loader'] == 'aqc1xx' else pins['efi_sha256']})
+    print(json.dumps({'machines': rows, 'hardware_validation': 'Separate physical tests required'}, indent=2))
+    return rows
+
+
+def record_test(args):
+    rows = status(args)
+    row = next((r for r in rows if r['machine'] == args.machine), None)
+    if not row or row['sha256'] != args.expected_sha256:
+        raise ValueError('Expected test checksum does not match deployed machine loader')
+    evidence = Path(args.evidence)
+    if evidence.is_symlink() or not evidence.is_file():
+        raise ValueError('Evidence must be a regular file')
+    raw = evidence.read_bytes()
+    state = ROOT.parent / 'ai-stores/vault/tools/ipxe/hardware-tests'
+    dest = state / datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S.%fZ')
+    dest.mkdir(parents=True)
+    (dest / 'evidence').write_bytes(raw)
+    put(dest / 'test.json', {'machine': row, 'test': args.test, 'result': args.result,
+                           'notes': args.notes, 'evidence_name': evidence.name,
+                           'evidence_sha256': hashlib.sha256(raw).hexdigest(),
+                           'verification': 'Operator-reported hardware result; deployed checksum checked at recording time'})
+    print(f'Test evidence recorded: {dest}')
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    s = p.add_subparsers(dest='command', required=True)
+    c = s.add_parser('request'); c.add_argument('machine'); c.add_argument('--output', required=True); c.set_defaults(func=request)
+    c = s.add_parser('build'); c.add_argument('--request', required=True); c.add_argument('--snapshot', required=True); c.add_argument('--output', required=True); c.add_argument('--jobs', type=int, choices=range(1,65), default=4); c.set_defaults(func=build)
+    c = s.add_parser('select'); c.add_argument('machine'); c.add_argument('--build', required=True); c.set_defaults(func=select)
+    c = s.add_parser('deploy-dhcp'); c.set_defaults(func=deploy)
+    c = s.add_parser('rollback'); c.add_argument('--transaction', required=True); c.set_defaults(func=rollback)
+    c = s.add_parser('status'); c.set_defaults(func=status)
+    c = s.add_parser('record-test'); c.add_argument('machine'); c.add_argument('--test', required=True, choices=['dhcp','http','forge-normal','local-boot','keyboard','full-provisioning']); c.add_argument('--result', required=True, choices=['pass','fail','not-tested']); c.add_argument('--expected-sha256', required=True); c.add_argument('--evidence', required=True); c.add_argument('--notes', required=True); c.set_defaults(func=record_test)
+    args = p.parse_args(); args.func(args)
+
+if __name__ == '__main__':
+    try:
+        main()
+    except (OSError, ValueError, RuntimeError, KeyError, subprocess.CalledProcessError) as e:
+        print(f'ERROR: {e}', file=sys.stderr)
+        sys.exit(1)

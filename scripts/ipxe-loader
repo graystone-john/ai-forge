@@ -1,0 +1,355 @@
+#!/usr/bin/python3
+"""Scoped Aquantia iPXE deployment, rollback, static checks and operator test records.
+
+The currently known daedalus02-snp routing must already exist in both the
+repository configuration and active configuration. Unknown layouts fail closed.
+The default ipxe.efi binary and legacy route are never replaced.
+"""
+import argparse
+import datetime as dt
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+import urllib.request
+import uuid
+
+MAC = "d8:5e:d3:0e:b8:3c"
+TAG = "daedalus02-snp"
+COMMIT = "ff6e52063e0b37062394fe37b9788af25175e7af"
+MAC_RULE = f"dhcp-mac=set:{TAG},{MAC}"
+LEGACY_RULE = f"dhcp-boot=tag:efi64,tag:!ipxe,tag:!{TAG},ipxe.efi"
+PREFIX = f"dhcp-boot=tag:efi64,tag:!ipxe,tag:{TAG},"
+
+
+def fail(message):
+    raise RuntimeError(message)
+
+
+def run(argv):
+    subprocess.run([str(x) for x in argv], check=True)
+
+
+def sha(path):
+    h = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def timestamp():
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+
+
+def write_json(path, value):
+    Path(path).write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def route(text):
+    lines = [s.strip() for s in text.splitlines() if s.strip() and not s.lstrip().startswith("#")]
+    related = [s for s in lines if TAG in s or "snponly.efi" in s or "ipxe-aqc13-" in s]
+    selected = [s for s in related if s.startswith(PREFIX)]
+    if (len(related) != 3 or lines.count(MAC_RULE) != 1 or lines.count(LEGACY_RULE) != 1 or len(selected) != 1):
+        fail("Unexpected DHCP routing. Expected exactly the existing MAC tag, Aquantia boot rule, and excluded legacy boot rule. Share the configuration before changing it.")
+    filename = selected[0][len(PREFIX):]
+    if not re.fullmatch(r"(?:snponly\.efi|ipxe-aqc13-[0-9a-f]{16}\.efi)", filename):
+        fail("Unexpected test loader filename: " + filename)
+    # A second unscoped EFI rule can change dnsmasq selection semantics.
+    other_efi = [s for s in lines if s.startswith("dhcp-boot=") and "tag:efi64" in s
+                 and "tag:!ipxe" in s and s not in (selected[0], LEGACY_RULE)]
+    if other_efi:
+        fail("Additional matching EFI boot rules require review: " + repr(other_efi))
+    return filename
+
+
+def replace_route(text, filename):
+    old = route(text)
+    updated, n = re.subn(r"(?m)^(\s*)" + re.escape(PREFIX + old) + r"[ \t]*$",
+                         lambda m: m.group(1) + PREFIX + filename, text)
+    if n != 1 or route(updated) != filename:
+        fail("Could not replace exactly one Aquantia boot rule")
+    return updated
+
+
+def atomic_bytes(path, data, mode=None, owner=None):
+    path = Path(path)
+    if path.is_symlink():
+        fail("Refusing to replace symlink: " + str(path))
+    stat = path.stat() if path.exists() else None
+    fd, name = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(name, mode if mode is not None else (stat.st_mode & 0o777 if stat else 0o644))
+        ownership = owner or ((stat.st_uid, stat.st_gid) if stat else None)
+        if ownership is not None:
+            os.chown(name, *ownership)
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)
+
+
+def verify_build(directory, variant):
+    directory = Path(directory).resolve()
+    entries = json.loads((directory / "checksums.json").read_text())
+    actual = set()
+    for item in directory.rglob("*"):
+        if item.is_symlink():
+            fail("Symlink in build output")
+        if item.is_file() and item.name != "checksums.json":
+            actual.add(str(item.relative_to(directory)))
+    if actual != set(entries):
+        fail("Build file inventory differs from checksums.json")
+    for name, digest in entries.items():
+        if Path(name).is_absolute() or ".." in Path(name).parts or sha(directory / name) != digest:
+            fail("Build checksum/path mismatch: " + name)
+    metadata = json.loads((directory / "build.json").read_text())
+    if metadata.get("commit") != COMMIT:
+        fail("Build is not pinned to the tested commit")
+    binary = directory / f"ipxe-native-{variant}.efi"
+    data = binary.read_bytes()
+    if len(data) < 64 or data[:2] != b"MZ":
+        fail("Invalid EFI image")
+    offset = struct.unpack_from("<I", data, 60)[0]
+    if not (offset + 94 <= len(data) and data[offset:offset + 4] == b"PE\0\0"
+            and struct.unpack_from("<H", data, offset + 4)[0] == 0x8664
+            and struct.unpack_from("<H", data, offset + 24)[0] == 0x20b
+            and struct.unpack_from("<H", data, offset + 92)[0] == 10):
+        fail("Build must be an x86-64 EFI application")
+    return binary
+
+
+def require_root():
+    if os.geteuid() != 0:
+        fail("This operation needs sudo for TFTP files and dnsmasq configuration")
+
+
+def paths(args):
+    source = Path(args.forge_root).expanduser().resolve() / "configs/dnsmasq/provisioning.conf"
+    active = Path(args.config)
+    tftp = Path(args.tftp)
+    if source == active.resolve():
+        fail("Managed repository configuration and active configuration must be separate files")
+    for p in (source, active, tftp / "ipxe.efi"):
+        if p.is_symlink() or not p.is_file():
+            fail("Expected a regular existing file: " + str(p))
+    return source, active, tftp
+
+
+def normal_response():
+    url = "http://10.10.10.1/forge/boot-mac?mac=" + MAC
+    with urllib.request.urlopen(url, timeout=10) as response:
+        text = response.read(65536).decode()
+    commands = [s.strip() for s in text.splitlines() if s.strip() and not s.startswith("#!")]
+    expected = ["echo Graystone AI Forge", "echo Machine: daedalus-02", "echo Mode: NORMAL",
+                "echo", "echo Continuing to local boot...", "exit"]
+    if commands != expected:
+        fail("Controller did not return the known NORMAL script. Run ./scripts/set-mode daedalus-02 normal and inspect the response before deployment.")
+    return text
+
+
+def service_check(restart=False):
+    run(["dnsmasq", "--test"])
+    if restart:
+        run(["systemctl", "restart", "dnsmasq"])
+    run(["systemctl", "is-active", "--quiet", "dnsmasq"])
+
+
+def status(args):
+    source, active, tftp = paths(args)
+    selected = route(active.read_text())
+    if route(source.read_text()) != selected:
+        fail("Repository routing and active routing differ")
+    if not (tftp / selected).is_file():
+        fail("Selected loader is missing")
+    service_check()
+    print(json.dumps({"aquantia_mac": MAC, "selected_loader": selected,
+                      "selected_sha256": sha(tftp / selected), "legacy_loader": "ipxe.efi",
+                      "legacy_sha256": sha(tftp / "ipxe.efi"),
+                      "checks": "Static routing, loader presence and dnsmasq service checked. Hardware PXE tests are separate."}, indent=2))
+
+
+def deploy(args):
+    require_root()
+    source, active, tftp = paths(args)
+    binary = verify_build(args.build, args.variant)
+    old = route(active.read_text())
+    if route(source.read_text()) != old:
+        fail("Repository and active routing differ; no changes made")
+    old_loader = tftp / old
+    if old_loader.is_symlink() or not old_loader.is_file():
+        fail("Current test loader is missing or a symlink")
+    normal = normal_response()
+    legacy_hash = sha(tftp / "ipxe.efi")
+    digest = sha(binary)
+    filename = "ipxe-aqc13-" + digest[:16] + ".efi"
+    selected = tftp / filename
+    if selected.exists() and (selected.is_symlink() or sha(selected) != digest):
+        fail("Loader name collision or symlink")
+    if old == filename:
+        service_check()
+        print("Requested loader and routing already active; no changes.")
+        return
+    state = Path(args.state).expanduser().resolve()
+    transaction = state / (timestamp() + "-deploy")
+    transaction.mkdir(parents=True)
+    before = {"repository": source.read_bytes(), "active": active.read_bytes()}
+    after = {key: replace_route(value.decode(), filename).encode() for key, value in before.items()}
+    for key in before:
+        (transaction / (key + ".before.conf")).write_bytes(before[key])
+        (transaction / (key + ".after.conf")).write_bytes(after[key])
+    shutil.copy2(old_loader, transaction / "previous.efi")
+    shutil.copy2(binary, transaction / "deployed.efi")
+    (transaction / "normal-response.ipxe").write_text(normal)
+    record = {"schema": 1, "status": "prepared", "variant": args.variant, "build": str(Path(args.build).resolve()),
+              "build_manifest_sha256": sha(Path(args.build) / "checksums.json"), "commit": COMMIT,
+              "repository_config": str(source), "active_config": str(active), "tftp": str(tftp),
+              "previous_filename": old, "filename": filename, "sha256": digest, "legacy_sha256": legacy_hash,
+              "before_hashes": {key: hashlib.sha256(value).hexdigest() for key, value in before.items()},
+              "after_hashes": {key: hashlib.sha256(value).hexdigest() for key, value in after.items()},
+              "previous_sha256": sha(old_loader)}
+    write_json(transaction / "transaction.json", record)
+    try:
+        # Install a unique binary first. Until the config changes, the previous
+        # route continues to use its original file.
+        if not selected.exists():
+            atomic_bytes(selected, binary.read_bytes(), mode=0o644, owner=(0, 0))
+        atomic_bytes(source, after["repository"])
+        atomic_bytes(active, after["active"])
+        service_check(restart=True)
+        if sha(selected) != digest or sha(tftp / "ipxe.efi") != legacy_hash:
+            fail("Post-deployment binary checksum mismatch")
+        record["status"] = "deployed"
+        write_json(transaction / "transaction.json", record)
+    except BaseException as original:
+        try:
+            atomic_bytes(source, before["repository"])
+            atomic_bytes(active, before["active"])
+            service_check(restart=True)
+            record["status"] = "failed-restored"
+        except BaseException as recovery:
+            record["status"] = "failed-recovery-needed"
+            record["recovery_error"] = str(recovery)
+        record["error"] = str(original)
+        write_json(transaction / "transaction.json", record)
+        print(f"Deployment failed. Recovery record: {transaction}", file=sys.stderr)
+        raise
+    print(f"Deployed {filename} for {MAC}; legacy ipxe.efi SHA256 unchanged.")
+    print(f"Rollback transaction: {transaction}")
+    print("Hardware validation is pending for this binary. No installation was armed.")
+
+
+def rollback(args):
+    require_root()
+    transaction = Path(args.transaction).resolve()
+    record = json.loads((transaction / "transaction.json").read_text())
+    if record["status"] != "deployed":
+        fail("Transaction is not an active completed deployment")
+    source, active, tftp = paths(args)
+    if (str(source), str(active), str(tftp)) != (record["repository_config"], record["active_config"], record["tftp"]):
+        fail("Rollback paths do not match the recorded deployment")
+    for key, path in (("repository", source), ("active", active)):
+        if sha(path) != record["after_hashes"][key]:
+            fail(f"{key} configuration changed since deployment; refusing to overwrite later edits")
+        if sha(transaction / (key + ".before.conf")) != record["before_hashes"][key]:
+            fail("Backup configuration checksum mismatch")
+    if sha(tftp / "ipxe.efi") != record["legacy_sha256"]:
+        fail("Legacy loader changed since deployment; review before rollback")
+    if sha(tftp / record["filename"]) != record["sha256"]:
+        fail("Deployed loader changed since deployment; review before rollback")
+    if sha(transaction / "previous.efi") != record["previous_sha256"]:
+        fail("Previous loader backup checksum mismatch")
+    previous = tftp / record["previous_filename"]
+    if previous.exists() and (previous.is_symlink() or sha(previous) != record["previous_sha256"]):
+        fail("Previous loader file was changed; refusing to replace it")
+    if not previous.exists():
+        atomic_bytes(previous, (transaction / "previous.efi").read_bytes(), mode=0o644, owner=(0, 0))
+    current = {"repository": source.read_bytes(), "active": active.read_bytes()}
+    try:
+        atomic_bytes(source, (transaction / "repository.before.conf").read_bytes())
+        atomic_bytes(active, (transaction / "active.before.conf").read_bytes())
+        service_check(restart=True)
+    except BaseException:
+        atomic_bytes(source, current["repository"])
+        atomic_bytes(active, current["active"])
+        service_check(restart=True)
+        raise
+    record["status"] = "rolled-back"
+    record["rolled_back_at"] = timestamp()
+    write_json(transaction / "transaction.json", record)
+    print("Previous routing restored. Both loader binaries retained for evidence.")
+
+
+def record_test(args):
+    _, active, tftp = paths(args)
+    filename = route(active.read_text()) if args.machine == "daedalus-02" else "ipxe.efi"
+    if sha(tftp / filename) != args.expected_sha256:
+        fail("Active loader differs from the binary identified for this test")
+    evidence = Path(args.evidence).resolve()
+    if not evidence.is_file():
+        fail("Supply a test transcript or photo file as evidence")
+    out = Path(args.state).expanduser().resolve() / "validations" / (timestamp() + "-" + uuid.uuid4().hex[:6])
+    out.mkdir(parents=True)
+    copy = out / ("evidence" + evidence.suffix)
+    shutil.copy2(evidence, copy)
+    write_json(out / "test.json", {"schema": 1, "recorded_at": timestamp(), "machine": args.machine,
+               "test": args.test, "result": args.result, "notes": args.notes,
+               "loader": filename, "sha256": sha(tftp / filename),
+               "evidence": copy.name, "evidence_sha256": sha(copy),
+               "attribution": "Operator-reported test result; script does not independently assert a hardware pass."})
+    print(f"Test result recorded: {out}")
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--forge-root", default=str(Path(__file__).resolve().parent.parent))
+    p.add_argument("--config", default="/etc/dnsmasq.d/provisioning.conf")
+    p.add_argument("--tftp", default="/srv/pxe/tftp")
+    p.add_argument("--state", required=True, help="Persistent deployment/test records, normally under ai-stores/vault/tools/ipxe/deployments")
+    sub = p.add_subparsers(dest="command", required=True)
+    c = sub.add_parser("status")
+    c.set_defaults(func=status)
+    c = sub.add_parser("deploy")
+    c.add_argument("--build", required=True)
+    c.add_argument("--variant", choices=("diagnostic", "forge"), default="diagnostic")
+    c.set_defaults(func=deploy)
+    c = sub.add_parser("rollback")
+    c.add_argument("--transaction", required=True)
+    c.set_defaults(func=rollback)
+    c = sub.add_parser("record-test")
+    c.add_argument("--machine", required=True, choices=("daedalus-01", "daedalus-02"))
+    c.add_argument("--test", required=True, choices=("dhcp", "http", "forge-normal", "local-boot", "keyboard", "full-provisioning"))
+    c.add_argument("--result", required=True, choices=("pass", "fail", "not-tested"))
+    c.add_argument("--evidence", required=True)
+    c.add_argument("--expected-sha256", required=True, help="SHA256 from the loader status/transaction for the actual test")
+    c.add_argument("--notes", required=True)
+    c.set_defaults(func=record_test)
+    args = p.parse_args()
+    state = Path(args.state).expanduser().resolve()
+    if args.command in ("deploy", "rollback"):
+        require_root()
+        state.mkdir(parents=True, exist_ok=True)
+        with (state / ".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            args.func(args)
+    else:
+        args.func(args)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (RuntimeError, OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
