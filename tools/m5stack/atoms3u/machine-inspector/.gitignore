@@ -1,0 +1,8 @@
+.pio/
+build/
+*.img
+__pycache__/
+.vscode/*
+!.vscode/extensions.json
+hardware-report-*.txt
+write-test.txt
