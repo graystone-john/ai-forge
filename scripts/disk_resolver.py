@@ -103,6 +103,12 @@ def atomic(path, data):
         if os.path.exists(temp):
             os.unlink(temp)
 
+def resolve_device(expected):
+    """Return the unique physical NVMe device matching a recorded hardware identity."""
+    chosen = select(expected, scan())
+    return chosen["path"], chosen
+
+
 def early_command(disk):
     payload = base64.b64encode(json.dumps(expected_identity(disk), sort_keys=True).encode()).decode()
     source = base64.b64encode(Path(__file__).read_bytes()).decode()

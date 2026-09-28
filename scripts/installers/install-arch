@@ -1,0 +1,481 @@
+#!/usr/bin/env python3
+
+import argparse
+import base64
+import ipaddress
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import yaml
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+
+from disk_resolver import resolve_device
+
+
+def load_yaml(path):
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def run(*args, input_text=None):
+    print("+", " ".join(str(x) for x in args), flush=True)
+    subprocess.run(
+        [str(x) for x in args],
+        check=True,
+        text=True,
+        input=input_text,
+    )
+
+
+def output(*args):
+    return subprocess.check_output(
+        [str(x) for x in args],
+        text=True,
+    ).strip()
+
+
+def require_command(name):
+    result = subprocess.run(
+        ["sh", "-c", f"command -v {name}"],
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Required command not found: {name}")
+    return result.stdout.strip()
+
+
+def write(path, text, mode=None):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    if mode is not None:
+        path.chmod(mode)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Graystone AI Forge Arch Linux base installer"
+    )
+    parser.add_argument("spec")
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Perform destructive installation",
+    )
+    args = parser.parse_args()
+
+    spec = load_yaml(args.spec)
+
+    machine = spec["machine"]
+    os_config = spec["os"]
+    ssh = spec["ssh"]
+    provisioning = spec["provisioning"]
+    os_disk = machine["os_disk"]
+
+    if os_config.get("distribution") != "arch":
+        raise RuntimeError("Installation specification is not Arch")
+
+    if machine.get("architecture") != "amd64":
+        raise RuntimeError(
+            f"Unsupported architecture: {machine.get('architecture')}"
+        )
+
+    print("==================================================")
+    print("Graystone AI Forge")
+    print("Arch Linux base installer")
+    print("==================================================")
+    print(f"Machine:      {machine['name']}")
+    print(f"Architecture: {machine['architecture']}")
+    print()
+
+    print("Expected OS disk:")
+    print(f"  Model:      {os_disk['model']}")
+    print(f"  Serial:     {os_disk['serial']}")
+    print(f"  Namespace:  {os_disk.get('namespace_id')}")
+    print()
+
+    device, resolved = resolve_device(os_disk)
+
+    print("Resolved OS disk:")
+    print(f"  Device:     {device}")
+    print(f"  Model:      {resolved['model']}")
+    print(f"  Serial:     {resolved['serial']}")
+    print(f"  Namespace:  {resolved['namespace_id']}")
+    print(f"  Udev:       {resolved['udev_serial']}")
+    print()
+
+    required = [
+        "sgdisk",
+        "partprobe",
+        "udevadm",
+        "mkfs.fat",
+        "mkfs.ext4",
+        "mount",
+        "umount",
+        "pacstrap",
+        "pacman-key",
+        "ssh-keygen",
+        "sshd",
+        "genfstab",
+        "arch-chroot",
+        "blkid",
+    ]
+
+    for command in required:
+        require_command(command)
+
+    print("Provisioning environment: PASS")
+
+    if not args.execute:
+        print()
+        print("DRY RUN COMPLETE")
+        print("NO DISK CHANGES WERE MADE.")
+        print(f"Validated target: {device}")
+        return
+
+    print()
+    print("==================================================")
+    print("DESTRUCTIVE INSTALLATION STARTING")
+    print("==================================================")
+    print(f"Target: {device}")
+    print(f"Serial: {resolved['serial']}")
+    print()
+
+    # Partition paths for NVMe.
+    efi = Path(f"{device}p1")
+    root = Path(f"{device}p2")
+
+    # Wipe and partition.
+    run("sgdisk", "--zap-all", device)
+    run(
+        "sgdisk",
+        "--new=1:0:+1G",
+        "--typecode=1:ef00",
+        "--change-name=1:EFI System",
+        device,
+    )
+    run(
+        "sgdisk",
+        "--new=2:0:0",
+        "--typecode=2:8300",
+        "--change-name=2:Arch Linux",
+        device,
+    )
+
+    run("partprobe", device)
+    run("udevadm", "settle")
+
+    if not efi.exists() or not root.exists():
+        raise RuntimeError("Expected partitions were not created")
+
+    # Filesystems.
+    run("mkfs.fat", "-F32", "-n", "EFI", efi)
+    run("mkfs.ext4", "-F", "-L", "arch-root", root)
+
+    # Mount target.
+    run("mount", root, "/mnt")
+    Path("/mnt/boot").mkdir(parents=True, exist_ok=True)
+    run("mount", efi, "/mnt/boot")
+
+    # Initialize the Arch live environment's package signing keyring.
+    # pacstrap copies this trusted host keyring into the new target.
+    run("pacman-key", "--init")
+    run("pacman-key", "--populate", "archlinux")
+
+    # Remove any incomplete target keyring before pacstrap.
+    # pacstrap will copy the valid Archiso host keyring into the target.
+    target_keyring = Path("/mnt/etc/pacman.d/gnupg")
+    if target_keyring.exists():
+        import shutil
+        shutil.rmtree(target_keyring)
+
+    # Minimal base OS.
+    run(
+        "pacstrap",
+        "/mnt",
+        "base",
+        "linux",
+        "linux-firmware",
+        "intel-ucode",
+        "openssh",
+        "sudo",
+        "efibootmgr",
+        "python",
+    )
+
+    # fstab.
+    fstab = output("genfstab", "-U", "/mnt")
+    write("/mnt/etc/fstab", fstab + "\n")
+
+    # Basic identity.
+    write("/mnt/etc/hostname", machine["name"] + "\n")
+
+    write(
+        "/mnt/etc/hosts",
+        "127.0.0.1 localhost\n"
+        "::1       localhost\n"
+        f"127.0.1.1 {machine['name']}.localdomain {machine['name']}\n",
+    )
+
+    # Locale.
+    locale_gen = Path("/mnt/etc/locale.gen")
+    text = locale_gen.read_text(encoding="utf-8")
+    text = text.replace("#en_US.UTF-8 UTF-8", "en_US.UTF-8 UTF-8")
+    locale_gen.write_text(text, encoding="utf-8")
+
+    run("arch-chroot", "/mnt", "locale-gen")
+    write("/mnt/etc/locale.conf", "LANG=en_US.UTF-8\n")
+
+    # UTC clock. Timezone can be layered later if desired.
+    run(
+        "arch-chroot",
+        "/mnt",
+        "ln",
+        "-sf",
+        "/usr/share/zoneinfo/UTC",
+        "/etc/localtime",
+    )
+    run("arch-chroot", "/mnt", "hwclock", "--systohc")
+
+    # Provisioning network.
+    # Match the physical provisioning NIC by MAC rather than Linux
+    # interface name; predictable names may differ between environments.
+    network = ipaddress.ip_network(
+        machine["provisioning_subnet"],
+        strict=False,
+    )
+    address = f"{machine['provisioning_ip']}/{network.prefixlen}"
+    provisioning_mac = machine["provisioning_mac"].lower()
+
+    write(
+        "/mnt/etc/systemd/network/20-ai-forge-provisioning.network",
+        "[Match]\n"
+        f"MACAddress={provisioning_mac}\n"
+        "\n"
+        "[Network]\n"
+        f"Address={address}\n"
+        "\n"
+        "[Link]\n"
+        "RequiredForOnline=no\n",
+    )
+
+    # AI Forge management account.
+    user = ssh["user"]
+
+    run(
+        "arch-chroot",
+        "/mnt",
+        "useradd",
+        "--create-home",
+        "--shell",
+        "/bin/bash",
+        "--comment",
+        "AI Forge automation",
+        user,
+    )
+
+    run("arch-chroot", "/mnt", "passwd", "-l", user)
+
+    ssh_dir = Path("/mnt/home") / user / ".ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+
+    write(
+        ssh_dir / "authorized_keys",
+        ssh["authorized_key"].strip() + "\n",
+        0o600,
+    )
+
+    run(
+        "arch-chroot",
+        "/mnt",
+        "chown",
+        "-R",
+        f"{user}:{user}",
+        f"/home/{user}/.ssh",
+    )
+
+    ssh_dir.chmod(0o700)
+
+    write(
+        "/mnt/etc/sudoers.d/90-ai-forge-ansible",
+        f"{user} ALL=(ALL) NOPASSWD: ALL\n",
+        0o440,
+    )
+
+    run(
+        "arch-chroot",
+        "/mnt",
+        "visudo",
+        "-cf",
+        "/etc/sudoers.d/90-ai-forge-ansible",
+    )
+
+    # Machine identity used by Forge boot control.
+    Path("/mnt/etc/ai-forge").mkdir(parents=True, exist_ok=True)
+
+    write(
+        "/mnt/etc/ai-forge/machine.json",
+        json.dumps(
+            {
+                "machine_id": machine["name"],
+                "provisioning_mac": machine["provisioning_mac"],
+            },
+            indent=2,
+        )
+        + "\n",
+        0o644,
+    )
+
+    # Boot-control helper.
+    helper = base64.b64decode(
+        spec["boot_control_b64"],
+        validate=True,
+    )
+
+    helper_path = Path("/mnt/usr/local/sbin/ai-forge-boot-control")
+    helper_path.parent.mkdir(parents=True, exist_ok=True)
+    helper_path.write_bytes(helper)
+    helper_path.chmod(0o755)
+
+    # Validate the installed Forge management runtime.
+    run(
+        "arch-chroot",
+        "/mnt",
+        "/usr/bin/python3",
+        "-m",
+        "py_compile",
+        "/usr/local/sbin/ai-forge-boot-control",
+    )
+
+    write(
+        "/mnt/etc/sudoers.d/ai-forge-boot-control",
+        f"{user} ALL=(root) NOPASSWD: "
+        "/usr/local/sbin/ai-forge-boot-control status\n"
+        f"{user} ALL=(root) NOPASSWD: "
+        "/usr/local/sbin/ai-forge-boot-control pxe-next\n"
+        f"{user} ALL=(root) NOPASSWD: "
+        "/usr/local/sbin/ai-forge-boot-control clear-next\n"
+        f"{user} ALL=(root) NOPASSWD: "
+        "/usr/local/sbin/ai-forge-boot-control reboot\n"
+        f"{user} ALL=(root) NOPASSWD: "
+        "/usr/local/sbin/ai-forge-boot-control poweroff\n",
+        0o440,
+    )
+
+    run(
+        "arch-chroot",
+        "/mnt",
+        "visudo",
+        "-cf",
+        "/etc/sudoers.d/ai-forge-boot-control",
+    )
+
+    # systemd-boot.
+    run("arch-chroot", "/mnt", "bootctl", "install")
+
+    root_uuid = output("blkid", "-s", "UUID", "-o", "value", root)
+
+    write(
+        "/mnt/boot/loader/loader.conf",
+        "default arch.conf\n"
+        "timeout 2\n"
+        "console-mode keep\n",
+    )
+
+    write(
+        "/mnt/boot/loader/entries/arch.conf",
+        "title   Arch Linux\n"
+        "linux   /vmlinuz-linux\n"
+        "initrd  /intel-ucode.img\n"
+        "initrd  /initramfs-linux.img\n"
+        f"options root=UUID={root_uuid} rw\n",
+    )
+
+    # Harden SSH for Forge key-only management.
+    write(
+        "/mnt/etc/ssh/sshd_config.d/90-ai-forge.conf",
+        "PubkeyAuthentication yes\n"
+        "PasswordAuthentication no\n"
+        "KbdInteractiveAuthentication no\n"
+        "PermitRootLogin no\n"
+        f"AllowUsers {user}\n",
+        0o644,
+    )
+
+    # Generate fresh SSH host keys for this provisioned machine.
+    run(
+        "arch-chroot",
+        "/mnt",
+        "ssh-keygen",
+        "-A",
+    )
+
+    # Validate the management account and key before declaring success.
+    run(
+        "arch-chroot",
+        "/mnt",
+        "test",
+        "-d",
+        f"/home/{user}/.ssh",
+    )
+    run(
+        "arch-chroot",
+        "/mnt",
+        "test",
+        "-s",
+        f"/home/{user}/.ssh/authorized_keys",
+    )
+    run(
+        "arch-chroot",
+        "/mnt",
+        "sshd",
+        "-t",
+    )
+
+    # Services required for Forge readiness.
+    run(
+        "arch-chroot",
+        "/mnt",
+        "systemctl",
+        "enable",
+        "systemd-networkd.service",
+    )
+    run(
+        "arch-chroot",
+        "/mnt",
+        "systemctl",
+        "enable",
+        "sshd.service",
+    )
+
+    print()
+    print("==================================================")
+    print("ARCH BASE INSTALL COMPLETE")
+    print("==================================================")
+    print(f"Machine: {machine['name']}")
+    print(f"Disk:    {device}")
+    print(f"Root:    {root}")
+    print(f"EFI:     {efi}")
+    print()
+    print("Installed system is ready for reboot.")
+    print()
+    print("Rebooting into installed Arch Linux...", flush=True)
+
+    run("sync")
+    run("umount", "/mnt/boot")
+    run("umount", "/mnt")
+    run("systemctl", "reboot")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        print()
+        print(f"ARCH INSTALLER FAILED: {exc}", file=sys.stderr)
+        sys.exit(1)

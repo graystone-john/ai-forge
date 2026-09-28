@@ -1,0 +1,30 @@
+#!ipxe
+
+set arch {{ arch_provisioning_base_url }}
+
+echo ==================================================
+echo Graystone AI Forge
+echo Machine: {{ machine_name }}
+echo Mode: PROVISION
+echo Arch Linux
+echo ==================================================
+echo
+echo WARNING: Automated installation is starting.
+echo The configured OS disk will be erased.
+echo
+echo Loading Arch provisioning environment...
+
+kernel ${arch}/vmlinuz-linux \
+  initrd=initramfs-linux.img \
+  ip={{ provisioning_ip }}::{{ provisioning_server }}:255.255.255.0:{{ machine_name }}:eth0:none \
+  archisobasedir=arch \
+  archiso_http_srv={{ arch_provisioning_http_root }}/ \
+  provision.spec=http://{{ provisioning_server }}/pxe/{{ machine_name }}/arch/install.yaml \
+  provision.installer=http://{{ provisioning_server }}/pxe/{{ machine_name }}/arch/install-arch \
+  provision.helper=http://{{ provisioning_server }}/pxe/{{ machine_name }}/arch/disk_resolver.py
+
+echo Loading Arch initramfs...
+initrd --name initramfs-linux.img ${arch}/initramfs-linux.img
+
+echo Starting Arch provisioning...
+boot

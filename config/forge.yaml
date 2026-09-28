@@ -1,12 +1,19 @@
 provisioning:
   server_ip: 10.10.10.1
-
 defaults:
   username: ai-forge
-
 images:
   ubuntu:
-    "24.04":
+    '24.04':
       iso: ubuntu-24.04.4-live-server-amd64.iso
       boot_base_url: http://10.10.10.1:81/ai-stores/vault/linux/ubuntu/releases/24.04.4/amd64/boot
       iso_url: http://10.10.10.1:81/ai-stores/vault/linux/ubuntu/releases/24.04.4/amd64/ubuntu-24.04.4-live-server-amd64.iso
+  arch:
+    2026.09.01:
+      bootstrap: archlinux-bootstrap-2026.09.01-x86_64.tar.zst
+      bootstrap_url: http://10.10.10.1:81/ai-stores/vault/linux/arch/releases/2026.09.01/amd64/bootstrap/archlinux-bootstrap-2026.09.01-x86_64.tar.zst
+      bootstrap_sha256: 895661bdf6c64e91b7725874165fd05dd30c438d3ffec661671ab5cfb261ca58
+      provisioning:
+        release: 2026.09.28
+        http_root: http://10.10.10.1:81/ai-stores/vault/linux/arch/provisioning/2026.09.28/amd64
+        boot_base_url: http://10.10.10.1:81/ai-stores/vault/linux/arch/provisioning/2026.09.28/amd64/pxe

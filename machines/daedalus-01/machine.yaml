@@ -26,5 +26,5 @@ ansible:
 inference_profile: muse-glimmer-30b
 runtime_profile: llama-b10612-daedalus-01-sm86
 profiles:
-- ubuntu-ai-node
+- arch-ai-node
 - coding-agent

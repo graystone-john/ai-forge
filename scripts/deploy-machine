@@ -22,6 +22,36 @@ echo
 echo "Generating configuration..."
 "$ROOT/scripts/generate.py" "$MACHINE"
 
+IS_ARCH="$(
+    python3 - "$ROOT" "$MACHINE" <<'PYARCH'
+from pathlib import Path
+import sys
+import yaml
+
+root = Path(sys.argv[1])
+machine_name = sys.argv[2]
+
+machine = yaml.safe_load(
+    (root / "machines" / machine_name / "machine.yaml").read_text()
+)
+
+distributions = []
+
+for profile_name in machine.get("profiles", []):
+    profile = yaml.safe_load(
+        (root / "profiles" / profile_name / "profile.yaml").read_text()
+    )
+    if "os" in profile:
+        distributions.append(profile["os"].get("distribution"))
+
+print("yes" if distributions == ["arch"] else "no")
+PYARCH
+)"
+
+if [[ "$IS_ARCH" == "yes" ]]; then
+    "$ROOT/scripts/generate-arch-install.py" "$MACHINE"
+fi
+
 echo
 echo "Validating configuration..."
 "$ROOT/scripts/validate-machine.py" "$MACHINE"
@@ -29,6 +59,26 @@ echo "Validating configuration..."
 echo
 echo "Deploying configuration..."
 "$ROOT/scripts/generate.py" "$MACHINE" --deploy
+
+if [[ "$IS_ARCH" == "yes" ]]; then
+    ARCH_GENERATED="$ROOT/generated/$MACHINE/arch"
+    ARCH_HTTP="$ROOT/runtime/http/$MACHINE/arch"
+
+    mkdir -p "$ARCH_HTTP"
+
+    cp         "$ARCH_GENERATED/install.yaml"         "$ARCH_HTTP/install.yaml"
+
+    cp         "$ROOT/scripts/installers/install-arch"         "$ARCH_HTTP/install-arch"
+
+    cp         "$ROOT/scripts/disk_resolver.py"         "$ARCH_HTTP/disk_resolver.py"
+
+    chmod 0755 "$ARCH_HTTP/install-arch"
+    chmod 0644         "$ARCH_HTTP/install.yaml"         "$ARCH_HTTP/disk_resolver.py"
+
+    echo "  $ARCH_HTTP/install.yaml"
+    echo "  $ARCH_HTTP/install-arch"
+    echo "  $ARCH_HTTP/disk_resolver.py"
+fi
 
 echo
 echo "Deployment complete: $MACHINE"

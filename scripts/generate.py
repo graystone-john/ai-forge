@@ -81,21 +81,12 @@ def main():
 
     os_profile_name, os_config = os_profiles[0]
 
-    if os_config.get("distribution") != "ubuntu":
-        raise RuntimeError(
-            f"Unsupported OS distribution in profile {os_profile_name}: "
-            f"{os_config.get('distribution')!r}"
-        )
-
-    ubuntu_version = os_config["version"]
+    distribution = os_config.get("distribution")
 
     context = {
         "machine_name": machine["name"],
         "provisioning_server": forge["provisioning"]["server_ip"],
-        "ubuntu_version": ubuntu_version,
-        "ubuntu_iso": forge["images"]["ubuntu"][ubuntu_version]["iso"],
-        "ubuntu_boot_base_url": forge["images"]["ubuntu"][ubuntu_version]["boot_base_url"],
-        "ubuntu_iso_url": forge["images"]["ubuntu"][ubuntu_version]["iso_url"],
+        "provisioning_ip": machine["network"]["provisioning_ip"],
         "username": forge["defaults"]["username"],
         "password_hash": secrets["password_hash"],
         "os_disk_serial": SENTINEL,
@@ -104,6 +95,39 @@ def main():
         "provisioning_mac": machine["network"]["provisioning_mac"],
         "boot_control_b64": boot_control_b64,
     }
+
+    if distribution == "ubuntu":
+        ubuntu_version = os_config["version"]
+        image = forge["images"]["ubuntu"][ubuntu_version]
+
+        context.update({
+            "ubuntu_version": ubuntu_version,
+            "ubuntu_iso": image["iso"],
+            "ubuntu_boot_base_url": image["boot_base_url"],
+            "ubuntu_iso_url": image["iso_url"],
+        })
+
+        provision_template = "ipxe/provision-ubuntu.ipxe"
+
+    elif distribution == "arch":
+        installer_release = os_config["installer_release"]
+        image = forge["images"]["arch"][installer_release]
+        provisioning = image["provisioning"]
+
+        context.update({
+            "arch_installer_release": installer_release,
+            "arch_provisioning_release": provisioning["release"],
+            "arch_provisioning_http_root": provisioning["http_root"],
+            "arch_provisioning_base_url": provisioning["boot_base_url"],
+        })
+
+        provision_template = "ipxe/provision-arch.ipxe"
+
+    else:
+        raise RuntimeError(
+            f"Unsupported OS distribution in profile {os_profile_name}: "
+            f"{distribution!r}"
+        )
 
     env = Environment(
         loader=FileSystemLoader(ROOT / "templates"),
@@ -118,10 +142,14 @@ def main():
     outputs = {
         "ipxe/entry.ipxe": "boot.ipxe",
         "ipxe/normal.ipxe": "normal.ipxe",
-        "ipxe/provision.ipxe": "provision.ipxe",
-        "autoinstall/user-data.yaml.j2": "user-data",
-        "autoinstall/meta-data.j2": "meta-data",
+        provision_template: "provision.ipxe",
     }
+
+    if distribution == "ubuntu":
+        outputs.update({
+            "autoinstall/user-data.yaml.j2": "user-data",
+            "autoinstall/meta-data.j2": "meta-data",
+        })
 
     generated = {}
 
@@ -135,15 +163,16 @@ def main():
         generated[output_name] = output_file
         print(f"Generated {output_file}")
 
-    # Cloud-init's NoCloud datasource probes vendor-data even when no
-    # vendor-specific configuration is required. If the file is missing,
-    # cloud-init retries the HTTP request for roughly 10 seconds.
-    # Publishing an intentionally empty file avoids that unnecessary delay.
-    vendor_data_file = output_dir / "vendor-data"
-    vendor_data_file.write_text("", encoding="utf-8")
+    if distribution == "ubuntu":
+        # Cloud-init's NoCloud datasource probes vendor-data even when no
+        # vendor-specific configuration is required. If the file is missing,
+        # cloud-init retries the HTTP request for roughly 10 seconds.
+        # Publishing an intentionally empty file avoids that unnecessary delay.
+        vendor_data_file = output_dir / "vendor-data"
+        vendor_data_file.write_text("", encoding="utf-8")
 
-    generated["vendor-data"] = vendor_data_file
-    print(f"Generated {vendor_data_file}")
+        generated["vendor-data"] = vendor_data_file
+        print(f"Generated {vendor_data_file}")
 
     if args.deploy:
         machine_http = HTTP_ROOT / machine_name
@@ -166,30 +195,33 @@ def main():
             machine_http / "provision.ipxe",
         )
 
-        # Ubuntu NoCloud Autoinstall data.
-        shutil.copy2(
-            generated["user-data"],
-            machine_http / "user-data",
-        )
+        if distribution == "ubuntu":
+            # Ubuntu NoCloud Autoinstall data.
+            shutil.copy2(
+                generated["user-data"],
+                machine_http / "user-data",
+            )
 
-        shutil.copy2(
-            generated["meta-data"],
-            machine_http / "meta-data",
-        )
+            shutil.copy2(
+                generated["meta-data"],
+                machine_http / "meta-data",
+            )
 
-        shutil.copy2(
-            generated["vendor-data"],
-            machine_http / "vendor-data",
-        )
+            shutil.copy2(
+                generated["vendor-data"],
+                machine_http / "vendor-data",
+            )
 
         print()
         print("Deployed:")
         print(f"  {HTTP_ROOT / 'boot.ipxe'}")
         print(f"  {machine_http / 'normal.ipxe'}")
         print(f"  {machine_http / 'provision.ipxe'}")
-        print(f"  {machine_http / 'user-data'}")
-        print(f"  {machine_http / 'meta-data'}")
-        print(f"  {machine_http / 'vendor-data'}")
+
+        if distribution == "ubuntu":
+            print(f"  {machine_http / 'user-data'}")
+            print(f"  {machine_http / 'meta-data'}")
+            print(f"  {machine_http / 'vendor-data'}")
 
 
 if __name__ == "__main__":
