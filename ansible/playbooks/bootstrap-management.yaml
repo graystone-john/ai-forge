@@ -8,6 +8,12 @@
     ai_forge_management_user: ai-forge
 
   tasks:
+    - name: Locate visudo
+      ansible.builtin.command:
+        cmd: sh -c 'command -v visudo'
+      register: visudo_command
+      changed_when: false
+
     - name: Create AI Forge management account
       ansible.builtin.user:
         name: "{{ ai_forge_management_user }}"
@@ -31,4 +37,4 @@
         mode: "0440"
         content: |
           ai-forge ALL=(ALL) NOPASSWD: ALL
-        validate: /usr/sbin/visudo -cf %s
+        validate: "{{ visudo_command.stdout }} -cf %s"
