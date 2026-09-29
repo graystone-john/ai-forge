@@ -93,6 +93,9 @@ echo "Timeout:     ${TIMEOUT}s"
 echo "Interval:    ${INTERVAL}s"
 echo
 
+STATE_DIR="$ROOT/runtime/state/$MACHINE"
+SSH_REFRESH_MARKER="$STATE_DIR/ssh-key-refresh"
+
 START="$(date +%s)"
 
 while true; do
@@ -113,18 +116,36 @@ while true; do
             set -e
 
             if [[ $CHECK_RC -eq 0 ]]; then
-                printf '[%3ss] SSH ready\n' "$ELAPSED"
+                if [[ -f "$SSH_REFRESH_MARKER" ]]; then
+                    rm -f "$SSH_REFRESH_MARKER"
+                    printf '[%3ss] SSH ready; new provisioned host identity accepted\n' "$ELAPSED"
+                else
+                    printf '[%3ss] SSH ready\n' "$ELAPSED"
+                fi
+
                 echo
                 echo "Ready: $MACHINE"
                 exit 0
             fi
 
             if [[ $CHECK_RC -eq 13 ]]; then
+                if [[ -f "$SSH_REFRESH_MARKER" ]]; then
+                    printf '[%3ss] expected SSH host key change after provisioning\n' "$ELAPSED"
+
+                    "$ROOT/scripts/forget-host-key" "$MACHINE"
+
+                    #
+                    # Do not clear the marker yet. The replacement host must
+                    # authenticate successfully with the AI Forge management
+                    # key before the transition is accepted.
+                    #
+                    continue
+                fi
+
                 printf '[%3ss] SSH host key mismatch\n' "$ELAPSED"
                 echo
                 echo "ERROR: SSH host key changed for $MACHINE ($IP)" >&2
-                echo "Run:" >&2
-                echo "  ssh-keygen -f ~/.ssh/known_hosts -R $IP" >&2
+                echo "No provisioning host-key refresh is armed." >&2
                 exit 13
             fi
 

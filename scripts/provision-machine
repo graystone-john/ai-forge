@@ -149,8 +149,29 @@ BOOTNEXT_SET=1
 echo
 echo "Arming one-shot provisioning..."
 
-"$ROOT/scripts/set-mode" "$MACHINE" provision
 ARMED=1
+"$ROOT/scripts/set-mode" "$MACHINE" provision
+
+MODE_FILE="$ROOT/runtime/state/$MACHINE/mode"
+MODE="$(cat "$MODE_FILE")"
+
+if [[ "$MODE" != "provision" ]]; then
+    echo "ERROR: Failed to verify PROVISION state for $MACHINE" >&2
+    exit 20
+fi
+
+echo "Provisioning state verified: $MODE"
+
+STATE_DIR="$ROOT/runtime/state/$MACHINE"
+SSH_REFRESH_MARKER="$STATE_DIR/ssh-key-refresh"
+
+#
+# A successful reinstall is expected to generate a new SSH host key.
+# Record that expectation so wait-machine can safely handle exactly one
+# host-key transition after provisioning.
+#
+touch "$SSH_REFRESH_MARKER"
+echo "SSH host-key refresh armed."
 
 echo
 echo "Rebooting $MACHINE into PXE..."
@@ -159,9 +180,8 @@ echo "Rebooting $MACHINE into PXE..."
 BOOTNEXT_SET=0
 
 echo
-echo "Removing old SSH host key after reboot request..."
-
-"$ROOT/scripts/forget-host-key" "$MACHINE"
+echo "Controller state immediately after reboot request:"
+cat "$MODE_FILE"
 
 ARMED=0
 

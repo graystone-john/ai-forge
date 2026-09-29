@@ -17,3 +17,6 @@ images:
         release: 2026.09.28
         http_root: http://10.10.10.1:81/ai-stores/vault/linux/arch/provisioning/2026.09.28/amd64
         boot_base_url: http://10.10.10.1:81/ai-stores/vault/linux/arch/provisioning/2026.09.28/amd64/pxe
+      pacman:
+        snapshot: 2026.09.28
+        base_url: http://10.10.10.1:81/ai-stores/vault/linux/arch/pacman/2026.09.28/amd64

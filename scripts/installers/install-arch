@@ -6,6 +6,7 @@ import ipaddress
 import json
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 import yaml
@@ -75,6 +76,8 @@ def main():
     os_config = spec["os"]
     ssh = spec["ssh"]
     provisioning = spec["provisioning"]
+    bootstrap = spec["bootstrap"]
+    pacman_config = bootstrap["pacman"]
     os_disk = machine["os_disk"]
 
     if os_config.get("distribution") != "arch":
@@ -194,18 +197,103 @@ def main():
         import shutil
         shutil.rmtree(target_keyring)
 
-    # Minimal base OS.
+    # Install the exact package closure captured in ai-stores.
+    #
+    # Package archives and detached signatures are the original Arch
+    # artifacts. pacstrap -U installs those native package files directly
+    # without consulting public Arch repositories.
+    pacman_base_url = pacman_config["base_url"].rstrip("/")
+    package_root = Path("/run/ai-forge-pacman")
+    package_root.mkdir(parents=True, exist_ok=True)
+
+    manifest_url = (
+        f"{pacman_base_url}/manifest/resolved-packages.tsv"
+    )
+    manifest_path = package_root / "resolved-packages.tsv"
+
+    print(f"Downloading package manifest: {manifest_url}")
+    urllib.request.urlretrieve(manifest_url, manifest_path)
+
+    package_files = []
+
+    with manifest_path.open(encoding="utf-8") as f:
+        header = f.readline().rstrip("\n").split("\t")
+
+        expected = [
+            "repository",
+            "name",
+            "version",
+            "architecture",
+            "filename",
+        ]
+
+        if header != expected:
+            raise RuntimeError(
+                f"Unexpected pacman manifest header: {header!r}"
+            )
+
+        for line in f:
+            line = line.rstrip("\n")
+
+            if not line:
+                continue
+
+            fields = line.split("\t")
+
+            if len(fields) != 5:
+                raise RuntimeError(
+                    f"Invalid pacman manifest row: {line!r}"
+                )
+
+            filename = fields[4]
+
+            if (
+                "/" in filename
+                or not filename.endswith(".pkg.tar.zst")
+            ):
+                raise RuntimeError(
+                    f"Invalid package filename: {filename!r}"
+                )
+
+            package_path = package_root / filename
+            signature_path = package_root / f"{filename}.sig"
+
+            package_url = (
+                f"{pacman_base_url}/packages/{filename}"
+            )
+            signature_url = (
+                f"{pacman_base_url}/packages/{filename}.sig"
+            )
+
+            print(f"Downloading {filename}")
+
+            urllib.request.urlretrieve(
+                package_url,
+                package_path,
+            )
+
+            urllib.request.urlretrieve(
+                signature_url,
+                signature_path,
+            )
+
+            package_files.append(str(package_path))
+
+    if not package_files:
+        raise RuntimeError(
+            "Pacman manifest contained no packages"
+        )
+
+    print(
+        f"Offline package closure: "
+        f"{len(package_files)} packages"
+    )
+
     run(
         "pacstrap",
+        "-U",
         "/mnt",
-        "base",
-        "linux",
-        "linux-firmware",
-        "intel-ucode",
-        "openssh",
-        "sudo",
-        "efibootmgr",
-        "python",
+        *package_files,
     )
 
     # fstab.

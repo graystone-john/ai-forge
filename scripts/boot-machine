@@ -73,6 +73,27 @@ echo "IP:      $IP"
 echo "Action:  $ACTION"
 echo
 
+if [[ "$ACTION" == "reboot" || "$ACTION" == "poweroff" ]]; then
+    #
+    # reboot/poweroff can terminate sshd before SSH receives the remote
+    # command's exit status. A transport disconnect is therefore expected
+    # after the shutdown request has been dispatched.
+    #
+    set +e
+    ssh \
+        -i "$SSH_KEY" \
+        "$SSH_USER@$IP" \
+        "sudo -n /usr/local/sbin/ai-forge-boot-control $ACTION"
+    SSH_RC=$?
+    set -e
+
+    if [[ "$SSH_RC" -ne 0 ]]; then
+        echo "SSH disconnected during $ACTION request (expected during shutdown)."
+    fi
+
+    exit 0
+fi
+
 ssh \
     -i "$SSH_KEY" \
     "$SSH_USER@$IP" \
