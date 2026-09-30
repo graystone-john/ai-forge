@@ -138,6 +138,18 @@ if "120" in cmake_setting("CMAKE_CUDA_ARCHITECTURES").split(";"):
         code_evidence.append(str(backend) + "\n" + listing)
     (metadata / "cuda-code.txt").write_text("\n".join(code_evidence) + "\n")
 
+if shutil.which("dpkg-query"):
+    package_manager = "dpkg"
+    package_inventory_command = [
+        "dpkg-query", "-W",
+        "-f=${binary:Package}\\t${Version}\\t${Architecture}\\t${db:Status-Status}\\n",
+    ]
+elif shutil.which("pacman"):
+    package_manager = "pacman"
+    package_inventory_command = ["pacman", "-Q"]
+else:
+    raise SystemExit("No supported package manager found for package evidence")
+
 evidence_commands = {
     "os-release.txt": ["cat", "/etc/os-release"],
     "kernel.txt": ["uname", "-a"],
@@ -147,10 +159,7 @@ evidence_commands = {
         "--query-gpu=name,compute_cap,driver_version",
         "--format=csv,noheader",
     ],
-    "installed-packages.tsv": [
-        "dpkg-query", "-W",
-        "-f=${binary:Package}\t${Version}\t${Architecture}\t${db:Status-Status}\n",
-    ],
+    "installed-packages.tsv": package_inventory_command,
     "cmake-version.txt": ["cmake", "--version"],
     "gcc-version.txt": [actual_compilers["gcc-version.txt"], "--version"],
     "gxx-version.txt": [actual_compilers["gxx-version.txt"], "--version"],
@@ -195,9 +204,14 @@ provenance = {
         "muse_vision_and_hermes": "pending",
         "clean_buildless_deployment": "pending",
     },
-    "package_evidence": (
-        "Full installed-package inventory; not a runtime dependency closure."
-    ),
+    "package_evidence": {
+        "manager": package_manager,
+        "file": "installed-packages.tsv",
+        "description": (
+            "Full installed-package inventory; "
+            "not a runtime dependency closure."
+        ),
+    },
 }
 (metadata / "provenance.json").write_text(
     json.dumps(provenance, indent=2) + "\n"
