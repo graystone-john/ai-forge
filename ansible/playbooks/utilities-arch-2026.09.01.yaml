@@ -1,0 +1,142 @@
+---
+- name: Configure common utilities - Arch 2026.09.01
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  vars:
+    arch_pacman_snapshot: "2026.09.29"
+    arch_pacman_base_url: >-
+      http://10.10.10.1:81/ai-stores/vault/linux/arch/pacman/2026.09.29
+
+    arch_utility_packages:
+      git: "2.55.0-1"
+      curl: "8.22.0-1"
+      rsync: "3.5.1-1"
+
+  tasks:
+    - name: Require Arch Linux
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Archlinux"
+        fail_msg: >-
+          Expected Arch Linux; found
+          {{ ansible_distribution }} {{ ansible_distribution_version }}
+
+    - name: Install AI Stores Pacman configuration
+      ansible.builtin.copy:
+        dest: /etc/pacman-ai-forge.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [options]
+          Architecture = auto
+          SigLevel = Required DatabaseOptional
+          LocalFileSigLevel = Optional
+
+          [core]
+          Server = {{ arch_pacman_base_url }}/core/os/$arch
+
+          [extra]
+          Server = {{ arch_pacman_base_url }}/extra/os/$arch
+
+    - name: Synchronize AI Stores Pacman databases
+      ansible.builtin.command:
+        argv:
+          - pacman
+          - --config
+          - /etc/pacman-ai-forge.conf
+          - -Sy
+          - --noconfirm
+      changed_when: false
+
+    - name: Verify utility packages are available from AI Stores
+      ansible.builtin.command:
+        argv:
+          - pacman
+          - --config
+          - /etc/pacman-ai-forge.conf
+          - -Si
+          - "{{ item.key }}"
+      loop: "{{ arch_utility_packages | dict2items }}"
+      register: arch_utility_repository
+      changed_when: false
+
+    - name: Require approved utility package versions
+      ansible.builtin.assert:
+        that:
+          - >-
+            ('Version         : ' ~ item.item.value)
+            in item.stdout
+        fail_msg: >-
+          AI Stores does not contain approved
+          {{ item.item.key }} {{ item.item.value }}
+      loop: "{{ arch_utility_repository.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+
+    - name: Query installed utility packages
+      ansible.builtin.command:
+        argv:
+          - pacman
+          - -Q
+          - "{{ item.key }}"
+      loop: "{{ arch_utility_packages | dict2items }}"
+      register: arch_utility_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Install utilities from AI Stores
+      ansible.builtin.command:
+        argv:
+          - pacman
+          - --config
+          - /etc/pacman-ai-forge.conf
+          - -S
+          - --noconfirm
+          - git
+          - curl
+          - rsync
+      when: >-
+        arch_utility_installed.results |
+        selectattr('rc', 'ne', 0) |
+        list |
+        length > 0
+
+    - name: Verify installed utility package versions
+      ansible.builtin.command:
+        argv:
+          - pacman
+          - -Q
+          - "{{ item.key }}"
+      loop: "{{ arch_utility_packages | dict2items }}"
+      register: arch_utility_packages_installed
+      changed_when: false
+
+    - name: Require approved installed utility versions
+      ansible.builtin.assert:
+        that:
+          - item.stdout == item.item.key ~ ' ' ~ item.item.value
+      loop: "{{ arch_utility_packages_installed.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+
+    - name: Verify common utility commands
+      ansible.builtin.command:
+        argv:
+          - "{{ item }}"
+          - --version
+      loop:
+        - git
+        - curl
+        - rsync
+      changed_when: false
+
+    - name: Report utility state
+      ansible.builtin.debug:
+        msg:
+          - "AI Stores snapshot: {{ arch_pacman_snapshot }}"
+          - "Git: {{ arch_utility_packages.git }}"
+          - "curl: {{ arch_utility_packages.curl }}"
+          - "rsync: {{ arch_utility_packages.rsync }}"
