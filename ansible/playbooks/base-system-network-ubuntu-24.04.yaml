@@ -10,7 +10,7 @@
   tasks:
     - name: Install AI Forge network configuration
       ansible.builtin.template:
-        src: ../roles/ai-forge/templates/90-ai-forge-network-ubuntu-24.04.yaml.j2
+        src: ../templates/90-ai-forge-network-ubuntu-24.04.yaml.j2
         dest: /etc/netplan/90-ai-forge-network.yaml
         owner: root
         group: root
