@@ -34,6 +34,27 @@ def sha256(path):
             digest.update(block)
     return digest.hexdigest()
 
+def linked_libraries(path):
+    output = run(["ldd", str(path)])
+    libraries = []
+
+    for line in output.splitlines():
+        if "=>" not in line:
+            continue
+
+        name, target = line.split("=>", 1)
+        target = target.strip().split()[0]
+
+        if target == "not":
+            raise SystemExit(
+                f"Unresolved runtime library for {path}: {line}"
+            )
+
+        if target.startswith("/"):
+            libraries.append((name.strip(), Path(target)))
+
+    return output, libraries
+
 server = runtime / "bin/llama-server"
 if not server.is_file():
     raise SystemExit(f"Installed server missing: {server}")
@@ -46,18 +67,16 @@ version = run([str(server), "--version"])
 if args.commit[:9] not in version:
     raise SystemExit(f"Installed version mismatch: {version}")
 
-linked = run(["ldd", str(server)])
-if "not found" in linked:
-    raise SystemExit(f"Unresolved runtime libraries:\n{linked}")
+linked, server_libraries = linked_libraries(server)
 
-for line in linked.splitlines():
-    if "=>" not in line:
-        continue
-    name, target = line.split("=>", 1)
-    if name.strip().startswith(("libllama", "libggml", "libmtmd")):
-        resolved = Path(target.strip().split()[0]).resolve()
+for name, target in server_libraries:
+    if name.startswith(("libllama", "libggml", "libmtmd")):
+        resolved = target.resolve()
         if not resolved.is_relative_to(runtime):
-            raise SystemExit(f"Library outside installed runtime: {line}")
+            raise SystemExit(
+                f"Library outside installed runtime: "
+                f"{name} => {target}"
+            )
 
 now = datetime.datetime.now(datetime.timezone.utc)
 capture_time = now.isoformat()
@@ -138,6 +157,78 @@ if "120" in cmake_setting("CMAKE_CUDA_ARCHITECTURES").split(";"):
         code_evidence.append(str(backend) + "\n" + listing)
     (metadata / "cuda-code.txt").write_text("\n".join(code_evidence) + "\n")
 
+# Create the deployable runtime without modifying the installed build.
+staged_runtime = capture / "runtime"
+shutil.copytree(runtime, staged_runtime, symlinks=True)
+
+bundled_cuda_libraries = []
+
+cuda_backends = sorted({
+    path.resolve()
+    for path in runtime.rglob("libggml-cuda.so*")
+    if path.is_file()
+})
+
+for backend in cuda_backends:
+    backend_linked, backend_libraries = linked_libraries(backend)
+
+    for soname, target in backend_libraries:
+        resolved = target.resolve()
+
+        try:
+            resolved.relative_to("/opt/cuda")
+        except ValueError:
+            continue
+
+        destination = staged_runtime / "lib" / resolved.name
+
+        if not destination.exists():
+            shutil.copy2(resolved, destination)
+
+        soname_path = staged_runtime / "lib" / soname
+
+        if soname_path != destination:
+            if soname_path.exists() or soname_path.is_symlink():
+                soname_path.unlink()
+            soname_path.symlink_to(destination.name)
+
+        record = {
+            "soname": soname,
+            "source": str(resolved),
+            "filename": resolved.name,
+            "sha256": sha256(resolved),
+        }
+
+        if record not in bundled_cuda_libraries:
+            bundled_cuda_libraries.append(record)
+
+# Validate the deployable copy. CUDA toolkit libraries must now resolve
+# from the staged runtime; libcuda remains supplied by the NVIDIA driver.
+staged_server = staged_runtime / "bin/llama-server"
+staged_backend = staged_runtime / "lib/libggml-cuda.so"
+
+staged_server_linked, _ = linked_libraries(staged_server)
+
+staged_backend_linked = ""
+if staged_backend.exists():
+    staged_backend_linked, _ = linked_libraries(staged_backend)
+
+staged_linked = (
+    "=== llama-server ===\n"
+    + staged_server_linked
+    + "\n\n=== libggml-cuda.so ===\n"
+    + staged_backend_linked
+)
+
+if "/opt/cuda" in staged_linked:
+    raise SystemExit(
+        "Staged runtime still resolves libraries from /opt/cuda"
+    )
+
+(metadata / "linked-libraries-staged.txt").write_text(
+    staged_linked + "\n"
+)
+
 if shutil.which("dpkg-query"):
     package_manager = "dpkg"
     package_inventory_command = [
@@ -204,6 +295,9 @@ provenance = {
         "muse_vision_and_hermes": "pending",
         "clean_buildless_deployment": "pending",
     },
+    "bundled_runtime_dependencies": {
+        "cuda": bundled_cuda_libraries,
+    },
     "package_evidence": {
         "manager": package_manager,
         "file": "installed-packages.tsv",
@@ -219,7 +313,7 @@ provenance = {
 
 archive = capture / "llama-runtime.tar.gz"
 with tarfile.open(archive, "w:gz", dereference=False) as tar:
-    tar.add(runtime, arcname="runtime")
+    tar.add(staged_runtime, arcname="runtime")
     tar.add(metadata, arcname="metadata")
 
 if inventory() != before:
