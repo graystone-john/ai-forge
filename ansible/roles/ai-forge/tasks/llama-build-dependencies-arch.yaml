@@ -1,0 +1,90 @@
+---
+- name: Require Arch build dependency configuration
+  ansible.builtin.assert:
+    that:
+      - llama_source_build.pacman_repository is defined
+      - llama_source_build.pacman_repository | length > 0
+      - llama_source_build.build_packages is defined
+      - llama_source_build.build_packages | length > 0
+    fail_msg: "Arch llama.cpp build dependency configuration is incomplete"
+
+- name: Define Arch build dependency paths
+  ansible.builtin.set_fact:
+    llama_build_pacman_config: "{{ llama_source_build.root }}/build-pacman.conf"
+
+- name: Create llama.cpp build root
+  ansible.builtin.file:
+    path: "{{ llama_source_build.root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure immutable Arch build repository
+  ansible.builtin.copy:
+    dest: "{{ llama_build_pacman_config }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [options]
+      Architecture = auto
+      SigLevel = Required DatabaseOptional
+      LocalFileSigLevel = Optional
+
+      [core]
+      Server = {{ llama_source_build.pacman_repository }}/core/os/$arch
+
+      [extra]
+      Server = {{ llama_source_build.pacman_repository }}/extra/os/$arch
+
+- name: Synchronize Arch build repository
+  ansible.builtin.command:
+    argv:
+      - pacman
+      - --config
+      - "{{ llama_build_pacman_config }}"
+      - -Sy
+      - --noconfirm
+  changed_when: false
+
+- name: Query requested Arch build packages
+  ansible.builtin.command:
+    argv:
+      - pacman
+      - --config
+      - "{{ llama_build_pacman_config }}"
+      - -Si
+      - "{{ item }}"
+  loop: "{{ llama_source_build.build_packages }}"
+  register: llama_arch_build_repository_packages
+  changed_when: false
+
+- name: Report dependency installation start
+  ansible.builtin.debug:
+    msg: >-
+      Installing Arch llama.cpp build dependencies from AI Stores.
+      Started: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
+
+- name: Install Arch build dependencies from AI Stores
+  ansible.builtin.command:
+    argv: >-
+      {{
+        [
+          'pacman',
+          '--config', llama_build_pacman_config,
+          '-S',
+          '--needed',
+          '--noconfirm'
+        ] + llama_source_build.build_packages
+      }}
+  register: llama_build_dependencies
+  changed_when: >-
+    'there is nothing to do' not in
+    (llama_build_dependencies.stdout | lower)
+
+- name: Report dependency installation completion
+  ansible.builtin.debug:
+    msg:
+      - "Ended: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+      - "Pacman elapsed: {{ llama_build_dependencies.delta }}"

@@ -1,0 +1,103 @@
+---
+- name: Define Ubuntu build dependency paths
+  ansible.builtin.set_fact:
+    llama_build_apt_source: "{{ llama_source_build.root }}/build-deps.list"
+    llama_build_apt_lists: "{{ llama_source_build.root }}/apt-lists"
+
+- name: Create build and APT directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ llama_source_build.root }}"
+    - "{{ llama_build_apt_lists }}"
+    - "{{ llama_build_apt_lists }}/partial"
+
+- name: Configure build dependency source
+  ansible.builtin.copy:
+    dest: "{{ llama_build_apt_source }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      deb [arch=amd64 trusted=yes] {{ llama_source_build.apt_repository }} noble main
+
+- name: Read exact dependency manifest from AI Stores
+  ansible.builtin.set_fact:
+    llama_build_package_lines: >-
+      {{ lookup('file', llama_source_build.package_manifest).splitlines()
+         | reject('match', '^\s*(#|$)') | list }}
+    llama_build_packages: []
+
+- name: Require a nonempty dependency manifest
+  ansible.builtin.assert:
+    that:
+      - llama_build_package_lines | length > 0
+
+- name: Validate dependency manifest rows
+  ansible.builtin.assert:
+    that:
+      - item.split() | length == 2
+  loop: "{{ llama_build_package_lines }}"
+  loop_control:
+    label: "{{ item.split() | first }}"
+
+- name: Assemble exact package specifications
+  ansible.builtin.set_fact:
+    llama_build_packages: >-
+      {{ llama_build_packages + [item.split()[0] ~ '=' ~ item.split()[1]] }}
+  loop: "{{ llama_build_package_lines }}"
+  loop_control:
+    label: "{{ item.split() | first }}"
+
+- name: Define isolated APT command
+  ansible.builtin.set_fact:
+    llama_build_apt_command:
+      - apt-get
+      - -o
+      - "Dir::Etc::sourcelist={{ llama_build_apt_source }}"
+      - -o
+      - "Dir::Etc::sourceparts=-"
+      - -o
+      - "Dir::State::lists={{ llama_build_apt_lists }}"
+
+- name: Report dependency installation start
+  ansible.builtin.debug:
+    msg: >-
+      Installing build dependencies from AI Stores.
+      Started: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}
+
+- name: Update build dependency metadata from AI Stores only
+  ansible.builtin.command:
+    argv: "{{ llama_build_apt_command + ['update'] }}"
+  changed_when: false
+
+- name: Resolve exact build dependencies before installation
+  ansible.builtin.command:
+    argv: >-
+      {{ llama_build_apt_command +
+         ['--simulate', '--no-install-recommends', '--no-remove', 'install'] +
+         llama_build_packages }}
+  changed_when: false
+
+- name: Install exact build dependencies from AI Stores
+  ansible.builtin.command:
+    argv: >-
+      {{ llama_build_apt_command +
+         ['--yes', '--no-install-recommends', '--no-remove', 'install'] +
+         llama_build_packages }}
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+    LC_ALL: C
+  register: llama_build_dependencies
+  changed_when: "'0 upgraded, 0 newly installed' not in llama_build_dependencies.stdout"
+
+- name: Report dependency installation completion
+  ansible.builtin.debug:
+    msg:
+      - "Ended: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+      - "APT elapsed: {{ llama_build_dependencies.delta }}"
+
