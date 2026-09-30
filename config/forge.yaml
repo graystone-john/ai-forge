@@ -20,3 +20,12 @@ images:
       pacman:
         snapshot: 2026.09.29
         base_url: http://10.10.10.1:81/ai-stores/vault/linux/arch/pacman/2026.09.29
+      packages:
+      - base
+      - linux
+      - linux-firmware
+      - intel-ucode
+      - openssh
+      - sudo
+      - efibootmgr
+      - python

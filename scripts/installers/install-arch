@@ -197,114 +197,62 @@ def main():
         import shutil
         shutil.rmtree(target_keyring)
 
-    # Install the exact package closure captured in ai-stores.
-    #
-    # Package archives and detached signatures are the original Arch
-    # artifacts. pacstrap -U installs those native package files directly
-    # without consulting public Arch repositories.
-    pacman_base_url = pacman_config["base_url"].rstrip("/")
-    package_root = Path("/run/ai-forge-pacman")
-    package_root.mkdir(parents=True, exist_ok=True)
+    # Install only the base packages declared by the generated
+    # installation specification. Dependencies are resolved from the
+    # sparse AI Stores Pacman repositories.
+    packages = bootstrap.get("packages")
 
-    manifest_url = (
-        f"{pacman_base_url}/manifest/resolved-packages.tsv"
-    )
-    manifest_path = package_root / "resolved-packages.tsv"
-
-    print(f"Downloading package manifest: {manifest_url}")
-    urllib.request.urlretrieve(manifest_url, manifest_path)
-
-    package_files = []
-
-    with manifest_path.open(encoding="utf-8") as f:
-        header = f.readline().rstrip("\n").split("\t")
-
-        expected = [
-            "repository",
-            "name",
-            "version",
-            "architecture",
-            "filename",
-        ]
-
-        if header != expected:
-            raise RuntimeError(
-                f"Unexpected pacman manifest header: {header!r}"
-            )
-
-        for line in f:
-            line = line.rstrip("\n")
-
-            if not line:
-                continue
-
-            fields = line.split("\t")
-
-            if len(fields) != 5:
-                raise RuntimeError(
-                    f"Invalid pacman manifest row: {line!r}"
-                )
-
-            repository = fields[0]
-            filename = fields[4]
-
-            if repository not in {"core", "extra"}:
-                raise RuntimeError(
-                    f"Unsupported pacman repository: {repository!r}"
-                )
-
-            if (
-                "/" in filename
-                or not filename.endswith(".pkg.tar.zst")
-            ):
-                raise RuntimeError(
-                    f"Invalid package filename: {filename!r}"
-                )
-
-            package_path = package_root / filename
-            signature_path = package_root / f"{filename}.sig"
-
-            repository_url = (
-                f"{pacman_base_url}/"
-                f"{repository}/os/x86_64"
-            )
-
-            package_url = (
-                f"{repository_url}/{filename}"
-            )
-            signature_url = (
-                f"{repository_url}/{filename}.sig"
-            )
-
-            print(f"Downloading {filename}")
-
-            urllib.request.urlretrieve(
-                package_url,
-                package_path,
-            )
-
-            urllib.request.urlretrieve(
-                signature_url,
-                signature_path,
-            )
-
-            package_files.append(str(package_path))
-
-    if not package_files:
+    if (
+        not isinstance(packages, list)
+        or not packages
+        or any(
+            not isinstance(package, str) or not package.strip()
+            for package in packages
+        )
+    ):
         raise RuntimeError(
-            "Pacman manifest contained no packages"
+            "Arch bootstrap packages must be a non-empty list"
         )
 
+    packages = [package.strip() for package in packages]
+
+    if len(packages) != len(set(packages)):
+        raise RuntimeError(
+            "Arch bootstrap packages contain duplicates"
+        )
+
+    pacman_base_url = pacman_config["base_url"].rstrip("/")
+    pacman_config_path = Path("/run/ai-forge-pacman.conf")
+
+    pacman_config_path.write_text(
+        "[options]\n"
+        "Architecture = auto\n"
+        "SigLevel = Required DatabaseOptional\n"
+        "LocalFileSigLevel = Optional\n"
+        "\n"
+        "[core]\n"
+        f"Server = {pacman_base_url}/core/os/$arch\n"
+        "\n"
+        "[extra]\n"
+        f"Server = {pacman_base_url}/extra/os/$arch\n",
+        encoding="utf-8",
+    )
+
+    print("Arch bootstrap packages:")
+    for package in packages:
+        print(f"  {package}")
+
     print(
-        f"Offline package closure: "
-        f"{len(package_files)} packages"
+        "Pacman source: "
+        f"{pacman_base_url}"
     )
 
     run(
         "pacstrap",
-        "-U",
+        "-C",
+        str(pacman_config_path),
         "/mnt",
-        *package_files,
+        *packages,
     )
 
     # fstab.
