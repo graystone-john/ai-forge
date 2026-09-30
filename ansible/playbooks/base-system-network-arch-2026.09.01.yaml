@@ -188,6 +188,19 @@
         enabled: true
         state: started
 
+    - name: Enable and start systemd-resolved
+      ansible.builtin.systemd_service:
+        name: systemd-resolved.service
+        enabled: true
+        state: started
+
+    - name: Configure system resolver
+      ansible.builtin.file:
+        src: /run/systemd/resolve/stub-resolv.conf
+        dest: /etc/resolv.conf
+        state: link
+        force: true
+
     - name: Flush network handlers
       ansible.builtin.meta: flush_handlers
 
@@ -236,6 +249,14 @@
           - -W
           - "3"
           - "1.1.1.1"
+      changed_when: false
+
+    - name: Verify DNS resolution
+      ansible.builtin.command:
+        argv:
+          - getent
+          - ahostsv4
+          - github.com
       changed_when: false
 
     - name: Report Arch network package state

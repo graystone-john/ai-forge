@@ -1,5 +1,5 @@
 ---
-- name: Verify AI Node after reboot
+- name: Verify AI Node after reboot - Ubuntu 24.04
   hosts: daedalus
   gather_facts: true
   become: true
@@ -7,13 +7,22 @@
   pre_tasks:
     - name: Report AI Forge stage start
       ansible.builtin.debug:
-        msg: "AI_FORGE_STEP_START name=post-reboot-validation machine={{ inventory_hostname }}"
+        msg: "AI_FORGE_STEP_START name=post-reboot-validation-ubuntu-24.04 machine={{ inventory_hostname }}"
 
   tasks:
-    - name: Require approved kernel after reboot
+    - name: Require Ubuntu 24.04 and approved kernel after reboot
       ansible.builtin.assert:
         that:
+          - ansible_distribution == "Ubuntu"
+          - ansible_distribution_version is version("24.04", ">=")
+          - ansible_distribution_version is version("25.04", "<")
           - ansible_kernel == daedalus_kernel.version
+        fail_msg: >-
+          Expected Ubuntu 24.04 with kernel
+          {{ daedalus_kernel.version }}; found
+          {{ ansible_distribution }}
+          {{ ansible_distribution_version }}
+          {{ ansible_kernel }}
 
     - name: Require active NVIDIA GPU after reboot
       ansible.builtin.command:
@@ -58,4 +67,4 @@
   post_tasks:
     - name: Report AI Forge stage complete
       ansible.builtin.debug:
-        msg: "AI_FORGE_STEP_COMPLETE name=post-reboot-validation machine={{ inventory_hostname }}"
+        msg: "AI_FORGE_STEP_COMPLETE name=post-reboot-validation-ubuntu-24.04 machine={{ inventory_hostname }}"
