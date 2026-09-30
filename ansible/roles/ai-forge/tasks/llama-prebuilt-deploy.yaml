@@ -3,8 +3,11 @@
   ansible.builtin.assert:
     that:
       - ansible_distribution == llama_prebuilt.distribution
-      - ansible_distribution_release == llama_prebuilt.release
       - ansible_architecture == llama_prebuilt.architecture
+      - >-
+        llama_prebuilt.release is not defined or
+        (ansible_distribution_release | default('')) ==
+        llama_prebuilt.release
 
 - name: Read target CPU identity
   ansible.builtin.command:
@@ -44,68 +47,24 @@
         llama_prebuilt.driver_version
     fail_msg: "Install the recorded NVIDIA configuration before deploying this artifact"
 
-- name: Read captured runtime driver prerequisites
-  ansible.builtin.command:
-    argv: [dpkg-query, -W, '-f=${Version}', '{{ item.package }}']
-  loop: "{{ llama_prebuilt.driver_packages | default([]) }}"
-  register: llama_driver_prerequisites
-  changed_when: false
-
-- name: Require captured runtime driver package versions
-  ansible.builtin.assert:
-    that:
-      - item.stdout == item.item.version
-    fail_msg: "Install the approved base-system NVIDIA driver before runtime deployment"
-  loop: "{{ llama_driver_prerequisites.results }}"
-  loop_control:
-    label: "{{ item.item.package }}"
-
-- name: Check deployment inputs on Athena
+- name: Check captured runtime archive on Athena
   ansible.builtin.stat:
-    path: "{{ item.path }}"
+    path: "{{ llama_prebuilt.archive }}"
     checksum_algorithm: sha256
-  loop:
-    - path: "{{ llama_prebuilt.archive }}"
-      expected: "{{ llama_prebuilt.archive_sha256 }}"
-    - path: "{{ llama_prebuilt.package_manifest }}"
-      expected: "{{ llama_prebuilt.package_manifest_sha256 }}"
-  register: llama_deploy_inputs
+  register: llama_deploy_archive_input
   delegate_to: localhost
   become: false
 
-- name: Require pinned deployment inputs
+- name: Require pinned runtime archive
   ansible.builtin.assert:
     that:
-      - item.stat.exists
-      - item.stat.checksum | default('') == item.item.expected
-    fail_msg: "Missing or changed deployment input: {{ item.item.path }}"
-  loop: "{{ llama_deploy_inputs.results }}"
-  loop_control:
-    label: "{{ item.item.path }}"
-
-- name: Read exact runtime dependency manifest
-  ansible.builtin.set_fact:
-    llama_runtime_package_lines: >-
-      {{ lookup('file', llama_prebuilt.package_manifest).splitlines()
-         | reject('match', '^\s*(#|$)') | list }}
-
-- name: Require runtime dependencies
-  ansible.builtin.assert:
-    that:
-      - llama_runtime_package_lines | length > 0
-
-- name: Validate runtime dependency rows
-  ansible.builtin.assert:
-    that:
-      - item.split() | length == 2
-    quiet: true
-  loop: "{{ llama_runtime_package_lines }}"
-
-- name: Assemble runtime package specifications
-  ansible.builtin.set_fact:
-    llama_runtime_packages: >-
-      {{ llama_runtime_package_lines | map('split')
-         | map('join', '=') | list }}
+      - llama_deploy_archive_input.stat.exists
+      - >-
+        llama_deploy_archive_input.stat.checksum | default('') ==
+        llama_prebuilt.archive_sha256
+    fail_msg: >-
+      Missing or changed deployment input:
+      {{ llama_prebuilt.archive }}
 
 - name: Create permanent deployment directories
   ansible.builtin.file:
@@ -117,63 +76,24 @@
   loop:
     - "{{ llama_prebuilt.root }}"
     - "{{ llama_prebuilt.root }}/deploy"
-    - "{{ llama_prebuilt.root }}/deploy/apt-lists"
-    - "{{ llama_prebuilt.root }}/deploy/apt-lists/partial"
 
-- name: Configure runtime dependency source
-  ansible.builtin.copy:
-    dest: "{{ llama_prebuilt.root }}/deploy/runtime-deps.list"
-    owner: root
-    group: root
-    mode: "0644"
-    content: |
-      deb [arch=amd64 trusted=yes] {{ llama_prebuilt.apt_repository }} noble main
+- name: Prepare Ubuntu prebuilt runtime dependencies
+  ansible.builtin.include_tasks:
+    file: llama-prebuilt-dependencies-ubuntu.yaml
+  when: ansible_distribution == "Ubuntu"
 
-- name: Define isolated runtime APT command
-  ansible.builtin.set_fact:
-    llama_runtime_apt:
-      - apt-get
-      - -o
-      - "Dir::Etc::sourcelist={{ llama_prebuilt.root }}/deploy/runtime-deps.list"
-      - -o
-      - "Dir::Etc::sourceparts=-"
-      - -o
-      - "Dir::State::lists={{ llama_prebuilt.root }}/deploy/apt-lists"
+- name: Prepare Arch prebuilt runtime dependencies
+  ansible.builtin.include_tasks:
+    file: llama-prebuilt-dependencies-arch.yaml
+  when: ansible_distribution == "Archlinux"
 
-- name: Report runtime dependency installation start
-  ansible.builtin.debug:
-    msg: "Runtime dependency installation started: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
-
-- name: Update runtime metadata from AI Stores only
-  ansible.builtin.command:
-    argv: "{{ llama_runtime_apt + ['update'] }}"
-  changed_when: false
-
-- name: Resolve exact runtime dependencies
-  ansible.builtin.command:
-    argv: >-
-      {{ llama_runtime_apt +
-         ['--simulate', '--no-install-recommends', '--no-remove', 'install'] +
-         llama_runtime_packages }}
-  changed_when: false
-
-- name: Install exact runtime dependencies
-  ansible.builtin.command:
-    argv: >-
-      {{ llama_runtime_apt +
-         ['--yes', '--no-install-recommends', '--no-remove', 'install'] +
-         llama_runtime_packages }}
-  environment:
-    DEBIAN_FRONTEND: noninteractive
-    LC_ALL: C
-  register: llama_runtime_apt_result
-  changed_when: "'0 upgraded, 0 newly installed' not in llama_runtime_apt_result.stdout"
-
-- name: Report runtime dependency installation completion
-  ansible.builtin.debug:
-    msg:
-      - "Completed: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
-      - "APT install elapsed: {{ llama_runtime_apt_result.delta }}"
+- name: Require supported prebuilt distribution
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution in ["Ubuntu", "Archlinux"]
+    fail_msg: >-
+      Unsupported llama.cpp prebuilt distribution:
+      {{ ansible_distribution }}
 
 - name: Configure captured CUDA runtime library paths
   ansible.builtin.copy:

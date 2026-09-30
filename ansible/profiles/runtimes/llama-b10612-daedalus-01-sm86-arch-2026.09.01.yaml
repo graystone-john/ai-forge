@@ -32,3 +32,32 @@ llama_source_build:
     - make
     - git
     - gzip
+
+llama_prebuilt:
+  version: b10612
+  commit: 7584430716ee229751771ed0d6bbcb780d105eeb
+  configuration_id: arch-2026.09.01-amd64-cuda13.4-sm86-daedalus-01-native
+
+  root: /opt/ai-forge/llama.cpp/b10612-cuda13.4-sm86
+
+  archive: "{{ playbook_dir }}/../../../ai-stores/vault/graystone/llama.cpp/b10612/arch-2026.09.01-amd64-cuda13.4-sm86-daedalus-01-native/20260930T061808Z-vvl1fi7b/llama-runtime.tar.gz"
+  archive_sha256: 0f799c9e21b9262d4fb1ca4fb95bd2ec1b52063fd80a4a62e888d20f1be0672c
+
+  distribution: Archlinux
+  architecture: x86_64
+
+  cpu_model: "11th Gen Intel(R) Core(TM) i9-11900K @ 3.50GHz"
+  gpu_name: "NVIDIA GeForce RTX 3090"
+  compute_capability: "8.6"
+  driver_version: "615.71.09"
+
+  runtime_packages:
+    glibc: "2.44+r50+g1848099f063e-1"
+    openssl: "3.6.4-1"
+    libgcc: "16.2.1+r23+gd564253eb6c8-1"
+    libstdc++: "16.2.1+r23+gd564253eb6c8-1"
+    libgomp: "16.2.1+r23+gd564253eb6c8-1"
+    brotli: "1.2.0-1"
+    zlib: "1:1.3.2-3"
+    zstd: "1.5.7-3"
+    nvidia-utils: "615.71.09-1"

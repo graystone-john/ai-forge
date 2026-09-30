@@ -1,0 +1,33 @@
+---
+- name: Require Arch prebuilt runtime package baseline
+  ansible.builtin.assert:
+    that:
+      - llama_prebuilt.runtime_packages is defined
+      - llama_prebuilt.runtime_packages | length > 0
+    fail_msg: "Arch prebuilt runtime package baseline is required"
+
+- name: Read installed Arch runtime packages
+  ansible.builtin.command:
+    argv:
+      - pacman
+      - -Q
+      - "{{ item.key }}"
+  loop: "{{ llama_prebuilt.runtime_packages | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: llama_arch_runtime_packages
+  changed_when: false
+
+- name: Require captured Arch runtime package versions
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - item.stdout ==
+        item.item.key ~ ' ' ~ item.item.value
+    fail_msg: >-
+      Arch runtime package mismatch for
+      {{ item.item.key }}:
+      expected {{ item.item.value }}
+  loop: "{{ llama_arch_runtime_packages.results }}"
+  loop_control:
+    label: "{{ item.item.key }}"
