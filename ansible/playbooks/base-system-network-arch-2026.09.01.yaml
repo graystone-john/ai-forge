@@ -11,12 +11,6 @@
     arch_pacman_base_url: >-
       http://10.10.10.1:81/ai-stores/vault/linux/arch/pacman/2026.09.29
 
-    arch_network_packages:
-      - repository: extra
-        filename: ell-0.83-1-x86_64.pkg.tar.zst
-      - repository: extra
-        filename: iwd-3.12-2-x86_64.pkg.tar.zst
-
   tasks:
     - name: Require Arch Linux
       ansible.builtin.assert:
@@ -59,48 +53,56 @@
       ansible.builtin.set_fact:
         arch_wifi_interface: "{{ arch_wifi_interface_lookup.stdout }}"
 
-    - name: Create AI Forge package staging directory
-      ansible.builtin.file:
-        path: /var/cache/ai-forge/pacman
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-
-    - name: Download Arch network packages from AI Stores
-      ansible.builtin.get_url:
-        url: >-
-          {{ arch_pacman_base_url }}/{{ item.repository }}/os/x86_64/{{
-          item.filename }}
-        dest: "/var/cache/ai-forge/pacman/{{ item.filename }}"
+    - name: Install AI Stores Pacman configuration
+      ansible.builtin.copy:
+        dest: /etc/pacman-ai-forge.conf
         owner: root
         group: root
         mode: "0644"
-      loop: "{{ arch_network_packages }}"
+        content: |
+          [options]
+          Architecture = auto
+          SigLevel = Required DatabaseOptional
+          LocalFileSigLevel = Optional
 
-    - name: Download Arch network package signatures from AI Stores
-      ansible.builtin.get_url:
-        url: >-
-          {{ arch_pacman_base_url }}/{{ item.repository }}/os/x86_64/{{
-          item.filename }}.sig
-        dest: "/var/cache/ai-forge/pacman/{{ item.filename }}.sig"
-        owner: root
-        group: root
-        mode: "0644"
-      loop: "{{ arch_network_packages }}"
+          [core]
+          Server = {{ arch_pacman_base_url }}/core/os/$arch
 
-    - name: Install Arch network packages
+          [extra]
+          Server = {{ arch_pacman_base_url }}/extra/os/$arch
+
+    - name: Synchronize AI Stores Pacman databases
       ansible.builtin.command:
         argv:
           - pacman
-          - -U
+          - --config
+          - /etc/pacman-ai-forge.conf
+          - -Sy
           - --noconfirm
-          - /var/cache/ai-forge/pacman/ell-0.83-1-x86_64.pkg.tar.zst
-          - /var/cache/ai-forge/pacman/iwd-3.12-2-x86_64.pkg.tar.zst
-      register: arch_network_package_install
-      changed_when: >-
-        'reinstalling' not in arch_network_package_install.stdout
-        and 'there is nothing to do' not in arch_network_package_install.stdout
+      changed_when: false
+
+    - name: Query installed iwd package
+      ansible.builtin.command:
+        argv:
+          - pacman
+          - -Q
+          - iwd
+      register: arch_iwd_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Install iwd from AI Stores
+      ansible.builtin.command:
+        argv:
+          - pacman
+          - --config
+          - /etc/pacman-ai-forge.conf
+          - -S
+          - --noconfirm
+          - iwd
+      when: >-
+        arch_iwd_installed.rc != 0 or
+        arch_iwd_installed.stdout != "iwd 3.12-2"
 
     - name: Verify iwd installation
       ansible.builtin.command:
@@ -188,6 +190,24 @@
 
     - name: Flush network handlers
       ansible.builtin.meta: flush_handlers
+
+    - name: Locate runtime Wi-Fi interface by MAC address
+      ansible.builtin.shell:
+        cmd: |
+          for interface in /sys/class/net/*; do
+              [ -f "$interface/address" ] || continue
+              if [ "$(cat "$interface/address")" = "{{ daedalus_network.wifi_mac | lower }}" ]; then
+                  basename "$interface"
+                  exit 0
+              fi
+          done
+          exit 1
+      register: arch_wifi_runtime_interface_lookup
+      changed_when: false
+
+    - name: Record runtime Wi-Fi interface
+      ansible.builtin.set_fact:
+        arch_wifi_interface: "{{ arch_wifi_runtime_interface_lookup.stdout }}"
 
     - name: Wait for Wi-Fi IPv4 address
       ansible.builtin.command:
