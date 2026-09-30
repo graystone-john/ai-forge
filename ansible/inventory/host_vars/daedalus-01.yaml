@@ -13,7 +13,7 @@ daedalus_network:
   wifi_mac: 14:18:c3:48:0f:7b
   wifi_pci_id: 8086:2725
 inference_profile: muse-glimmer-30b
-runtime_profile: llama-b10612-daedalus-01-sm86
-llama_runtime_profile: '{{ playbook_dir }}/../profiles/runtimes/llama-b10612-daedalus-01-sm86.yaml'
-llama_build_profile: '{{ playbook_dir }}/../profiles/runtimes/llama-b10612-daedalus-01-sm86.yaml'
-llama_deploy_profile: '{{ playbook_dir }}/../profiles/runtimes/llama-b10612-daedalus-01-sm86.yaml'
+runtime_profile: llama-b10612-daedalus-01-sm86-arch-2026-09-01
+llama_runtime_profile: '{{ playbook_dir }}/../profiles/runtimes/llama-b10612-daedalus-01-sm86-arch-2026-09-01.yaml'
+llama_build_profile: '{{ playbook_dir }}/../profiles/runtimes/llama-b10612-daedalus-01-sm86-arch-2026-09-01.yaml'
+llama_deploy_profile: '{{ playbook_dir }}/../profiles/runtimes/llama-b10612-daedalus-01-sm86-arch-2026-09-01.yaml'
