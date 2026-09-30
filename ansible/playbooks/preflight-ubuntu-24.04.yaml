@@ -4,6 +4,14 @@
   gather_facts: true
 
   tasks:
+    - name: Require Daedalus architecture
+      ansible.builtin.assert:
+        that:
+          - ansible_architecture == "x86_64"
+        fail_msg: >-
+          Daedalus requires x86_64; detected
+          {{ ansible_architecture }}
+
     - name: Verify Ubuntu 24.04
       ansible.builtin.assert:
         that:
@@ -41,5 +49,6 @@
           - "Machine: {{ inventory_hostname }}"
           - "Desired OS: Ubuntu 24.04"
           - "Detected OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Architecture: {{ ansible_architecture }}"
           - "Kernel: {{ ansible_kernel }}"
           - "Provisioning interface: {{ provisioning.interface }}"
