@@ -90,13 +90,13 @@ metadata = capture / "metadata"
 metadata.mkdir()
 
 # Record every installed file and symbolic link.
-def inventory():
+def inventory(runtime_root):
     entries = {}
-    for path in sorted(runtime.rglob("*")):
-        relative = path.relative_to(runtime).as_posix()
+    for path in sorted(runtime_root.rglob("*")):
+        relative = path.relative_to(runtime_root).as_posix()
         if path.is_symlink():
             resolved = path.resolve(strict=True)
-            if not resolved.is_relative_to(runtime):
+            if not resolved.is_relative_to(runtime_root):
                 raise SystemExit(f"External runtime symbolic link: {path}")
             entries[relative] = {
                 "type": "symlink",
@@ -113,8 +113,8 @@ def inventory():
             raise SystemExit(f"Unsupported installed entry: {path}")
     return entries
 
-before = inventory()
-(metadata / "runtime-files.json").write_text(
+before = inventory(runtime)
+(metadata / "original-runtime-files.json").write_text(
     json.dumps(before, indent=2) + "\n"
 )
 (metadata / "version.txt").write_text(version + "\n")
@@ -229,6 +229,12 @@ if "/opt/cuda" in staged_linked:
     staged_linked + "\n"
 )
 
+# Record the exact deployable runtime, including bundled dependencies.
+deployable_inventory = inventory(staged_runtime)
+(metadata / "runtime-files.json").write_text(
+    json.dumps(deployable_inventory, indent=2) + "\n"
+)
+
 if shutil.which("dpkg-query"):
     package_manager = "dpkg"
     package_inventory_command = [
@@ -316,7 +322,7 @@ with tarfile.open(archive, "w:gz", dereference=False) as tar:
     tar.add(staged_runtime, arcname="runtime")
     tar.add(metadata, arcname="metadata")
 
-if inventory() != before:
+if inventory(runtime) != before:
     archive.unlink()
     raise SystemExit("Runtime changed during capture; rerun after the build finishes")
 

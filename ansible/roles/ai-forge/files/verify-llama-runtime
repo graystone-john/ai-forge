@@ -63,10 +63,36 @@ for line in linked.splitlines():
     if "=>" not in line:
         continue
     name, target = line.split("=>", 1)
-    if name.strip().startswith(("libllama", "libggml", "libmtmd")):
+    if name.strip().startswith(
+        ("libllama", "libggml", "libmtmd", "libcudart", "libcublas")
+    ):
         library = Path(target.strip().split()[0]).resolve()
         if not library.is_relative_to(runtime):
             raise SystemExit(f"Library resolved outside runtime: {line}")
+
+cuda_backend = runtime / "lib/libggml-cuda.so"
+if cuda_backend.is_file():
+    cuda_linked = run(["ldd", str(cuda_backend)])
+
+    if "not found" in cuda_linked:
+        raise SystemExit(
+            f"Unresolved CUDA backend libraries:\n{cuda_linked}"
+        )
+
+    for line in cuda_linked.splitlines():
+        if "=>" not in line:
+            continue
+
+        name, target = line.split("=>", 1)
+
+        if name.strip().startswith(
+            ("libggml", "libcudart", "libcublas")
+        ):
+            library = Path(target.strip().split()[0]).resolve()
+            if not library.is_relative_to(runtime):
+                raise SystemExit(
+                    f"CUDA backend library resolved outside runtime: {line}"
+                )
 
 print(version)
 print("Installed file hashes, permissions, and symbolic links verified.")
