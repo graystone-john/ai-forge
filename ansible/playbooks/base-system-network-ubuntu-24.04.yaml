@@ -4,10 +4,13 @@
   gather_facts: true
   become: true
 
+  vars_files:
+    - ../../secrets/local.yaml
+
   tasks:
     - name: Install AI Forge network configuration
       ansible.builtin.template:
-        src: 90-ai-forge-network-ubuntu-24.04.yaml.j2
+        src: ../roles/ai-forge/templates/90-ai-forge-network-ubuntu-24.04.yaml.j2
         dest: /etc/netplan/90-ai-forge-network.yaml
         owner: root
         group: root
@@ -19,3 +22,47 @@
       ansible.builtin.command:
         cmd: netplan generate
       changed_when: false
+
+    - name: Flush network handlers
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for Wi-Fi IPv4 address
+      ansible.builtin.command:
+        argv:
+          - ip
+          - -4
+          - -o
+          - addr
+          - show
+          - dev
+          - "{{ daedalus_network.wifi_interface }}"
+      register: ubuntu_wifi_address
+      changed_when: false
+      retries: 20
+      delay: 2
+      until: ubuntu_wifi_address.stdout | length > 0
+
+    - name: Verify Wi-Fi Internet connectivity
+      ansible.builtin.command:
+        argv:
+          - ping
+          - -I
+          - "{{ daedalus_network.wifi_interface }}"
+          - -c
+          - "2"
+          - -W
+          - "3"
+          - "1.1.1.1"
+      changed_when: false
+
+    - name: Report Ubuntu network state
+      ansible.builtin.debug:
+        msg:
+          - "Provisioning interface: {{ provisioning.interface }}"
+          - "Wi-Fi interface: {{ daedalus_network.wifi_interface }}"
+          - "Wi-Fi MAC: {{ daedalus_network.wifi_mac }}"
+
+  handlers:
+    - name: Apply netplan
+      ansible.builtin.command:
+        cmd: netplan apply

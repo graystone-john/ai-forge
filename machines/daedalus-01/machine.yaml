@@ -30,5 +30,5 @@ runtime_profile: llama-b10612-daedalus-01-sm86
 profiles:
 - coding-agent
 os:
-  distribution: arch
-  version: 2026.09.01
+  distribution: ubuntu
+  version: '24.04'
