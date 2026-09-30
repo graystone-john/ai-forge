@@ -27,5 +27,7 @@ ansible:
 inference_profile: muse-glimmer-30b
 runtime_profile: llama-b10612-daedalus-02-sm120
 profiles:
-- ubuntu-ai-node
 - coding-agent
+os:
+  distribution: ubuntu
+  version: '24.04'

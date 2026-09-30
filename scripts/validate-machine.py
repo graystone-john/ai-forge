@@ -26,19 +26,20 @@ for profile_name in machine.get("profiles", []):
     profile_file = ROOT / "profiles" / profile_name / "profile.yaml"
     profiles[profile_name] = yaml.safe_load(profile_file.read_text())
 
-os_profiles = [
-    (name, profile["os"])
-    for name, profile in profiles.items()
-    if "os" in profile
-]
+os_config = machine.get("os")
 
-if len(os_profiles) != 1:
+if not isinstance(os_config, dict):
     raise RuntimeError(
-        f"Expected exactly one OS profile; found {len(os_profiles)}"
+        f"Machine {machine_name} has no OS configuration"
     )
 
-os_profile_name, os_config = os_profiles[0]
 distribution = os_config.get("distribution")
+os_version = os_config.get("version")
+
+if not distribution or not os_version:
+    raise RuntimeError(
+        f"Machine {machine_name} requires os.distribution and os.version"
+    )
 
 provision = provision_file.read_text()
 os_disk = machine["hardware"]["os_disk"]
@@ -160,7 +161,7 @@ elif distribution == "arch":
     print(f"Machine:       {machine['name']}")
     print(f"Architecture:  {machine['architecture']}")
     print(f"OS:            Arch Linux ({os_config['version']})")
-    print(f"Installer:     {os_config['installer_release']}")
+    print(f"Installer:     {os_config['version']}")
     print(f"OS disk model:       {os_disk['model']}")
     print(f"Hardware serial:     {os_disk['serial']}")
     print(f"Udev serial:         {os_disk['udev_serial']}")
@@ -171,6 +172,6 @@ elif distribution == "arch":
 
 else:
     raise RuntimeError(
-        f"Unsupported OS distribution in profile {os_profile_name}: "
+        f"Unsupported OS distribution for machine {machine_name}: "
         f"{distribution!r}"
     )

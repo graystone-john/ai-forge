@@ -24,30 +24,24 @@ def main():
     forge = load_yaml(ROOT / "config" / "forge.yaml")
     secrets = load_yaml(ROOT / "secrets" / "local.yaml")
 
-    os_profiles = []
+    os_config = machine.get("os")
 
-    for profile_name in machine.get("profiles", []):
-        profile = load_yaml(
-            ROOT / "profiles" / profile_name / "profile.yaml"
-        )
-
-        if "os" in profile:
-            os_profiles.append((profile_name, profile))
-
-    if len(os_profiles) != 1:
+    if not isinstance(os_config, dict):
         raise RuntimeError(
-            f"Expected exactly one OS profile; found {len(os_profiles)}"
+            f"Machine {args.machine} has no OS configuration"
         )
-
-    profile_name, profile = os_profiles[0]
-    os_config = profile["os"]
 
     if os_config.get("distribution") != "arch":
         raise RuntimeError(
-            f"{profile_name} is not an Arch profile"
+            f"Machine {args.machine} is not configured for Arch"
         )
 
-    release = str(os_config["installer_release"])
+    if not os_config.get("version"):
+        raise RuntimeError(
+            f"Machine {args.machine} has no Arch version"
+        )
+
+    release = str(os_config["version"])
     artifact = forge["images"]["arch"][release]
 
     public_key_path = (

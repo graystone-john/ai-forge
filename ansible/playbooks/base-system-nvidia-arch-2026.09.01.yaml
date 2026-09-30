@@ -1,0 +1,141 @@
+---
+- name: Configure NVIDIA - Arch 2026.09.01
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  vars:
+    arch_pacman_snapshot: "2026.09.29"
+    arch_pacman_base_url: >-
+      http://10.10.10.1:81/ai-stores/vault/linux/arch/pacman/2026.09.29
+
+    arch_nvidia_package: nvidia-open
+    arch_nvidia_package_version: "615.71.09-4"
+    arch_nvidia_utils_version: "615.71.09-1"
+    arch_kernel_version: "7.2.7-arch1-1"
+
+  tasks:
+    - name: Require Arch Linux
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Archlinux"
+          - ansible_kernel == arch_kernel_version
+        fail_msg: >-
+          NVIDIA baseline requires Arch with kernel
+          {{ arch_kernel_version }}; running
+          {{ ansible_distribution }} {{ ansible_kernel }}
+
+    - name: Install AI Stores Pacman configuration
+      ansible.builtin.copy:
+        dest: /etc/pacman-ai-forge.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [options]
+          Architecture = auto
+          SigLevel = Required DatabaseOptional
+          LocalFileSigLevel = Optional
+
+          [core]
+          Server = {{ arch_pacman_base_url }}/core/os/$arch
+
+          [extra]
+          Server = {{ arch_pacman_base_url }}/extra/os/$arch
+
+    - name: Synchronize AI Stores Pacman databases
+      ansible.builtin.command:
+        argv:
+          - pacman
+          - --config
+          - /etc/pacman-ai-forge.conf
+          - -Sy
+          - --noconfirm
+      changed_when: false
+
+    - name: Query NVIDIA package from AI Stores
+      ansible.builtin.command:
+        argv:
+          - pacman
+          - --config
+          - /etc/pacman-ai-forge.conf
+          - -Si
+          - nvidia-open
+      register: arch_nvidia_repository
+      changed_when: false
+
+    - name: Require approved NVIDIA package
+      ansible.builtin.assert:
+        that:
+          - >-
+            ('Version         : ' ~ arch_nvidia_package_version)
+            in arch_nvidia_repository.stdout
+        fail_msg: >-
+          AI Stores does not contain approved
+          nvidia-open {{ arch_nvidia_package_version }}
+
+    - name: Query installed NVIDIA package
+      ansible.builtin.command:
+        argv:
+          - pacman
+          - -Q
+          - nvidia-open
+      register: arch_nvidia_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Install NVIDIA from AI Stores
+      ansible.builtin.command:
+        argv:
+          - pacman
+          - --config
+          - /etc/pacman-ai-forge.conf
+          - -S
+          - --noconfirm
+          - nvidia-open
+      register: arch_nvidia_install
+      when: >-
+        arch_nvidia_installed.rc != 0 or
+        arch_nvidia_installed.stdout !=
+        'nvidia-open ' ~ arch_nvidia_package_version
+
+    - name: Verify installed NVIDIA packages
+      ansible.builtin.command:
+        argv:
+          - pacman
+          - -Q
+          - "{{ item }}"
+      loop:
+        - nvidia-open
+        - nvidia-utils
+      register: arch_nvidia_packages
+      changed_when: false
+
+    - name: Require approved NVIDIA package versions
+      ansible.builtin.assert:
+        that:
+          - >-
+            arch_nvidia_packages.results[0].stdout ==
+            'nvidia-open ' ~ arch_nvidia_package_version
+          - >-
+            arch_nvidia_packages.results[1].stdout ==
+            'nvidia-utils ' ~ arch_nvidia_utils_version
+
+    - name: Verify NVIDIA kernel module exists
+      ansible.builtin.command:
+        argv:
+          - modinfo
+          - -k
+          - "{{ arch_kernel_version }}"
+          - nvidia
+      changed_when: false
+
+    - name: Report NVIDIA state
+      ansible.builtin.debug:
+        msg:
+          - "AI Stores snapshot: {{ arch_pacman_snapshot }}"
+          - "Kernel: {{ arch_kernel_version }}"
+          - "NVIDIA: {{ arch_nvidia_package }} {{ arch_nvidia_package_version }}"
+          - "NVIDIA utilities: {{ arch_nvidia_utils_version }}"
+          - "NVIDIA installation changed: {{ arch_nvidia_install.changed }}"
+          - "Reboot required: {{ arch_nvidia_install.changed }}"

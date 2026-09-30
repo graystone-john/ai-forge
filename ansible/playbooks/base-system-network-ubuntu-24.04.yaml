@@ -1,0 +1,21 @@
+---
+- name: Configure base network - Ubuntu 24.04
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  tasks:
+    - name: Install AI Forge network configuration
+      ansible.builtin.template:
+        src: 90-ai-forge-network-ubuntu-24.04.yaml.j2
+        dest: /etc/netplan/90-ai-forge-network.yaml
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      notify: Apply netplan
+
+    - name: Validate Netplan configuration
+      ansible.builtin.command:
+        cmd: netplan generate
+      changed_when: false

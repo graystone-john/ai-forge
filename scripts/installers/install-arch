@@ -245,7 +245,13 @@ def main():
                     f"Invalid pacman manifest row: {line!r}"
                 )
 
+            repository = fields[0]
             filename = fields[4]
+
+            if repository not in {"core", "extra"}:
+                raise RuntimeError(
+                    f"Unsupported pacman repository: {repository!r}"
+                )
 
             if (
                 "/" in filename
@@ -258,11 +264,16 @@ def main():
             package_path = package_root / filename
             signature_path = package_root / f"{filename}.sig"
 
+            repository_url = (
+                f"{pacman_base_url}/"
+                f"{repository}/os/x86_64"
+            )
+
             package_url = (
-                f"{pacman_base_url}/packages/{filename}"
+                f"{repository_url}/{filename}"
             )
             signature_url = (
-                f"{pacman_base_url}/packages/{filename}.sig"
+                f"{repository_url}/{filename}.sig"
             )
 
             print(f"Downloading {filename}")

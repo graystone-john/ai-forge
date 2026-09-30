@@ -21,10 +21,14 @@ network:
   wifi_interface: wlp8s0
   provisioning_pci_id: 8086:15f3
   provisioning_loader: legacy
+  wifi_mac: 14:18:c3:48:0f:7b
+  wifi_pci_id: 8086:2725
 ansible:
   user: ai-forge
 inference_profile: muse-glimmer-30b
 runtime_profile: llama-b10612-daedalus-01-sm86
 profiles:
-- arch-ai-node
 - coding-agent
+os:
+  distribution: arch
+  version: 2026.09.01

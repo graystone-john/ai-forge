@@ -29,6 +29,8 @@ network:
   provisioning_subnet: PROVISIONING_SUBNET
   provisioning_interface: PROVISIONING_INTERFACE
   wifi_interface: WIFI_INTERFACE
+  wifi_mac: WIFI_MAC
+  wifi_pci_id: WIFI_PCI_ID
 
 ansible:
   user: ai-forge

@@ -243,30 +243,78 @@ def main():
     )
 
     wireless = []
-    for name, details in re.findall(
-        r"^Interface: ([^\n]+)\n([\s\S]*?)(?=^Interface: |\Z)",
-        interfaces,
-        re.MULTILINE,
-    ):
+    for name, details in interface_blocks:
         if re.search(r"^Kind: wireless$", details, re.MULTILINE):
-            wireless.append(name.strip())
+            wireless.append((name.strip(), details))
 
     if args.wifi_interface:
-        if args.wifi_interface not in wireless:
+        matches = [
+            (name, details)
+            for name, details in wireless
+            if name == args.wifi_interface
+        ]
+        if len(matches) != 1:
+            choices = [name for name, _ in wireless]
             fail(
                 f"Selected Wi-Fi interface {args.wifi_interface!r} "
-                f"is not a wireless interface in the report: {wireless}"
+                f"is not a wireless interface in the report: {choices}"
             )
-        selected_wifi = args.wifi_interface
+        selected_wifi, wifi_nic = matches[0]
     elif len(wireless) == 1:
-        selected_wifi = wireless[0]
+        selected_wifi, wifi_nic = wireless[0]
     else:
+        choices = [name for name, _ in wireless]
         fail(
-            f"Expected one wireless interface; found {wireless}. "
+            f"Expected one wireless interface; found {choices}. "
             "For multiple interfaces, select one with --wifi-interface."
         )
 
-    assign(["network", "wifi_interface"], selected_wifi, "WIFI_INTERFACE")
+    wifi_permanent = re.findall(
+        r"^Permanent address: (.+)$",
+        wifi_nic,
+        re.MULTILINE,
+    )
+    if wifi_permanent:
+        wifi_mac = one(
+            r"^Permanent address: (.+)$",
+            wifi_nic,
+        ).lower()
+    else:
+        if one(r"^addr_assign_type: (.+)$", wifi_nic) != "0":
+            fail("Wi-Fi address is not reported as permanent.")
+        wifi_mac = one(r"^address: (.+)$", wifi_nic).lower()
+
+    if not re.fullmatch(
+        r"(?:[0-9a-f]{2}:){5}[0-9a-f]{2}",
+        wifi_mac,
+    ):
+        fail("Invalid Wi-Fi MAC address.")
+
+    if (
+        wifi_mac == "00:00:00:00:00:00"
+        or int(wifi_mac[:2], 16) & 1
+    ):
+        fail("Invalid Wi-Fi unicast MAC address.")
+
+    wifi_vendor = one(r"^PCI vendor: 0x([0-9a-fA-F]{4})$", wifi_nic)
+    wifi_device = one(r"^PCI device: 0x([0-9a-fA-F]{4})$", wifi_nic)
+    wifi_pci_id = f"{wifi_vendor.lower()}:{wifi_device.lower()}"
+
+    assign(
+        ["network", "wifi_interface"],
+        selected_wifi,
+        "WIFI_INTERFACE",
+    )
+    assign(
+        ["network", "wifi_mac"],
+        wifi_mac,
+        "WIFI_MAC",
+    )
+    assign(
+        ["network", "wifi_pci_id"],
+        wifi_pci_id,
+        "WIFI_PCI_ID",
+    )
     record_nic(updated["network"], report_pci(nic))
 
     # Allocation policy for the existing AI Forge provisioning network.

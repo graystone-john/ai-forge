@@ -1,0 +1,44 @@
+---
+- name: AI Node preflight - Arch 2026.09.01
+  hosts: daedalus
+  gather_facts: true
+
+  tasks:
+    - name: Verify Arch Linux
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Archlinux"
+        fail_msg: >-
+          Expected Arch Linux 2026.09.01 baseline, found
+          {{ ansible_distribution }} {{ ansible_distribution_version }}
+
+    - name: Verify systemd-networkd provisioning configuration
+      ansible.builtin.stat:
+        path: /etc/systemd/network/20-ai-forge-provisioning.network
+      register: provisioning_network_config
+
+    - name: Require systemd-networkd provisioning configuration
+      ansible.builtin.assert:
+        that:
+          - provisioning_network_config.stat.exists
+        fail_msg: "Expected Arch provisioning network configuration not found"
+
+    - name: Verify provisioning Ethernet exists
+      ansible.builtin.stat:
+        path: /sys/class/net/{{ provisioning.interface }}
+      register: provisioning_nic
+
+    - name: Require provisioning Ethernet
+      ansible.builtin.assert:
+        that:
+          - provisioning_nic.stat.exists
+        fail_msg: "Provisioning interface {{ provisioning.interface }} not found"
+
+    - name: Report preflight result
+      ansible.builtin.debug:
+        msg:
+          - "Machine: {{ inventory_hostname }}"
+          - "Desired OS: Arch 2026.09.01"
+          - "Detected OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Kernel: {{ ansible_kernel }}"
+          - "Provisioning interface: {{ provisioning.interface }}"

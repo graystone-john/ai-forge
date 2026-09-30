@@ -38,3 +38,4 @@ __pycache__/
 # Local AI Forge machine state
 /runtime/state/*
 !/runtime/state/.gitkeep
+.registration.lock

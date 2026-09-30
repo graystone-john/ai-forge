@@ -1,0 +1,10 @@
+name: arch-2026.09.01-ai-node
+os:
+  distribution: arch
+  version: 2026.09.01
+ssh:
+  enabled: true
+updates:
+  policy: rolling
+packages:
+- openssh

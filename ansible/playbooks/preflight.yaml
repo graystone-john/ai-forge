@@ -4,29 +4,51 @@
   gather_facts: true
 
   tasks:
-    - name: Select preflight for detected operating system
+    - name: Read AI Forge machine configuration
       ansible.builtin.set_fact:
-        ai_forge_preflight_os: >-
+        ai_forge_machine_config: >-
           {{
-            'ubuntu'
-            if ansible_distribution == 'Ubuntu'
-            else 'arch'
-            if ansible_distribution == 'Archlinux'
-            else 'unsupported'
+            lookup(
+              'file',
+              '../../machines/' ~ inventory_hostname ~ '/machine.yaml'
+            ) | from_yaml
           }}
 
-    - name: Require supported operating system
+    - name: Require declared operating system
       ansible.builtin.assert:
         that:
-          - ai_forge_preflight_os != "unsupported"
+          - ai_forge_machine_config.os is defined
+          - ai_forge_machine_config.os.distribution is defined
+          - ai_forge_machine_config.os.version is defined
         fail_msg: >-
-          Unsupported operating system:
-          {{ ansible_distribution }} {{ ansible_distribution_version }}
+          Machine configuration must define os.distribution and os.version
 
-    - name: Run operating-system preflight
-      ansible.builtin.include_tasks:
-        file: "../tasks/preflight/{{ ai_forge_preflight_os }}.yaml"
+    - name: Select version-specific preflight
+      ansible.builtin.set_fact:
+        ai_forge_preflight_file: >-
+          preflight-{{
+            ai_forge_machine_config.os.distribution
+          }}-{{
+            ai_forge_machine_config.os.version
+          }}.yaml
 
-    - name: Run common preflight
+    - name: Verify version-specific preflight exists
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../tasks/{{ ai_forge_preflight_file }}"
+      delegate_to: localhost
+      become: false
+      register: preflight_implementation
+
+    - name: Require version-specific preflight
+      ansible.builtin.assert:
+        that:
+          - preflight_implementation.stat.exists
+        fail_msg: >-
+          No validated preflight implementation exists for
+          {{ ai_forge_machine_config.os.distribution }}
+          {{ ai_forge_machine_config.os.version }}.
+          Expected {{ ai_forge_preflight_file }}.
+
+    - name: Run version-specific preflight
       ansible.builtin.include_tasks:
-        file: "../tasks/preflight/common.yaml"
+        file: "../tasks/{{ ai_forge_preflight_file }}"

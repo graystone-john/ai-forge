@@ -1,4 +1,4 @@
-name: ubuntu-ai-node
+name: ubuntu-24.04-ai-node
 
 os:
   distribution: ubuntu

@@ -1,15 +1,84 @@
 ---
+- name: Read AI Forge machine configuration
+  ansible.builtin.set_fact:
+    ai_forge_machine_config: >-
+      {{
+        lookup(
+          'file',
+          '../../../machines/' ~ inventory_hostname ~ '/machine.yaml'
+        ) | from_yaml
+      }}
+
+- name: Require declared operating system
+  ansible.builtin.assert:
+    that:
+      - ai_forge_machine_config.os is defined
+      - ai_forge_machine_config.os.distribution is defined
+      - ai_forge_machine_config.os.version is defined
+    fail_msg: >-
+      Machine configuration must define os.distribution and os.version
+
+- name: Define base-system implementations
+  ansible.builtin.set_fact:
+    ai_forge_base_system_kernel: >-
+      base-system-kernel-{{
+        ai_forge_machine_config.os.distribution
+      }}-{{
+        ai_forge_machine_config.os.version
+      }}.yaml
+    ai_forge_base_system_network: >-
+      base-system-network-{{
+        ai_forge_machine_config.os.distribution
+      }}-{{
+        ai_forge_machine_config.os.version
+      }}.yaml
+    ai_forge_base_system_nvidia: >-
+      base-system-nvidia-{{
+        ai_forge_machine_config.os.distribution
+      }}-{{
+        ai_forge_machine_config.os.version
+      }}.yaml
+
 - name: Apply Daedalus hardware baseline
-  ansible.builtin.include_tasks: daedalus-base.yaml
+  ansible.builtin.include_tasks:
+    file: daedalus-base.yaml
+
+- name: Verify base-system implementations exist
+  ansible.builtin.stat:
+    path: "{{ role_path }}/tasks/{{ item }}"
+  delegate_to: localhost
+  become: false
+  loop:
+    - "{{ ai_forge_base_system_kernel }}"
+    - "{{ ai_forge_base_system_network }}"
+    - "{{ ai_forge_base_system_nvidia }}"
+  register: ai_forge_base_system_implementations
+
+- name: Require base-system implementations
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+    fail_msg: >-
+      No validated base-system implementation exists for
+      {{ ai_forge_machine_config.os.distribution }}
+      {{ ai_forge_machine_config.os.version }}.
+      Missing {{ item.item }}.
+  loop: "{{ ai_forge_base_system_implementations.results }}"
+  loop_control:
+    label: "{{ item.item }}"
 
 - name: Apply kernel policy
-  ansible.builtin.include_tasks: kernel-policy.yaml
+  ansible.builtin.include_tasks:
+    file: "{{ ai_forge_base_system_kernel }}"
 
 - name: Configure networking
-  ansible.builtin.include_tasks: network.yaml
+  ansible.builtin.include_tasks:
+    file: "{{ ai_forge_base_system_network }}"
 
 - name: Verify utilities
-  ansible.builtin.include_tasks: utilities.yaml
+  ansible.builtin.include_tasks:
+    file: utilities.yaml
 
 - name: Configure NVIDIA
-  ansible.builtin.include_tasks: nvidia.yaml
+  ansible.builtin.include_tasks:
+    file: "{{ ai_forge_base_system_nvidia }}"

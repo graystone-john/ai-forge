@@ -80,6 +80,8 @@ def build_outputs(machine_name, machine):
         "provisioning_mac": network.get("provisioning_mac"),
         "provisioning_interface": network.get("provisioning_interface"),
         "wifi_interface": network.get("wifi_interface"),
+        "wifi_mac": network.get("wifi_mac"),
+        "wifi_pci_id": network.get("wifi_pci_id"),
     }
 
     missing = [name for name, value in required.items() if not value]
@@ -112,6 +114,8 @@ def build_outputs(machine_name, machine):
         },
         "daedalus_network": {
             "wifi_interface": required["wifi_interface"],
+            "wifi_mac": str(required["wifi_mac"]).lower(),
+            "wifi_pci_id": str(required["wifi_pci_id"]).lower(),
         },
         "inference_profile": machine.get("inference_profile"),
         "runtime_profile": runtime_profile,

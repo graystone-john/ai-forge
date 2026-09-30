@@ -1,0 +1,87 @@
+---
+- name: Configure kernel policy - Arch 2026.09.01
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  vars:
+    graystone_arch_linux_package_version: "7.2.7.arch1-1"
+    graystone_arch_kernel_version: "7.2.7-arch1-1"
+
+  tasks:
+    - name: Require Arch Linux
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Archlinux"
+        fail_msg: >-
+          Expected Arch Linux; found
+          {{ ansible_distribution }} {{ ansible_distribution_version }}
+
+    - name: Query installed Arch kernel package
+      ansible.builtin.command:
+        argv:
+          - pacman
+          - -Q
+          - linux
+      register: arch_linux_package
+      changed_when: false
+
+    - name: Require approved Arch kernel package
+      ansible.builtin.assert:
+        that:
+          - >-
+            arch_linux_package.stdout ==
+            'linux ' ~ graystone_arch_linux_package_version
+        fail_msg: >-
+          Unexpected Arch linux package:
+          {{ arch_linux_package.stdout }};
+          expected linux {{ graystone_arch_linux_package_version }}
+
+    - name: Require approved running kernel
+      ansible.builtin.assert:
+        that:
+          - ansible_kernel == graystone_arch_kernel_version
+        fail_msg: >-
+          Unexpected running kernel {{ ansible_kernel }};
+          expected {{ graystone_arch_kernel_version }}
+
+    - name: Verify kernel module tree
+      ansible.builtin.stat:
+        path: "/usr/lib/modules/{{ graystone_arch_kernel_version }}"
+      register: arch_kernel_modules
+
+    - name: Require kernel module tree
+      ansible.builtin.assert:
+        that:
+          - arch_kernel_modules.stat.exists
+          - arch_kernel_modules.stat.isdir
+        fail_msg: >-
+          Kernel module tree for
+          {{ graystone_arch_kernel_version }} is missing
+
+    - name: Verify Intel Ethernet module
+      ansible.builtin.command:
+        argv:
+          - modinfo
+          - -k
+          - "{{ graystone_arch_kernel_version }}"
+          - igc
+      changed_when: false
+
+    - name: Verify Intel Wi-Fi module
+      ansible.builtin.command:
+        argv:
+          - modinfo
+          - -k
+          - "{{ graystone_arch_kernel_version }}"
+          - iwlwifi
+      changed_when: false
+
+    - name: Report Arch kernel state
+      ansible.builtin.debug:
+        msg:
+          - "Arch baseline: 2026.09.01"
+          - "Linux package: {{ arch_linux_package.stdout }}"
+          - "Running kernel: {{ ansible_kernel }}"
+          - "Ethernet module: igc"
+          - "Wi-Fi module: iwlwifi"

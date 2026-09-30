@@ -62,26 +62,20 @@ def main():
             ROOT / "profiles" / profile_name / "profile.yaml"
         )
 
-    os_profiles = [
-        (profile_name, profile["os"])
-        for profile_name, profile in profiles.items()
-        if "os" in profile
-    ]
+    os_config = machine.get("os")
 
-    if not os_profiles:
+    if not isinstance(os_config, dict):
         raise RuntimeError(
-            f"Machine {machine_name} has no profile defining an OS"
+            f"Machine {machine_name} has no OS configuration"
         )
-
-    if len(os_profiles) > 1:
-        names = ", ".join(name for name, _ in os_profiles)
-        raise RuntimeError(
-            f"Machine {machine_name} has multiple profiles defining an OS: {names}"
-        )
-
-    os_profile_name, os_config = os_profiles[0]
 
     distribution = os_config.get("distribution")
+    os_version = os_config.get("version")
+
+    if not distribution or not os_version:
+        raise RuntimeError(
+            f"Machine {machine_name} requires os.distribution and os.version"
+        )
 
     context = {
         "machine_name": machine["name"],
@@ -110,7 +104,7 @@ def main():
         provision_template = "ipxe/provision-ubuntu.ipxe"
 
     elif distribution == "arch":
-        installer_release = os_config["installer_release"]
+        installer_release = os_config["version"]
         image = forge["images"]["arch"][installer_release]
         provisioning = image["provisioning"]
 
@@ -125,7 +119,7 @@ def main():
 
     else:
         raise RuntimeError(
-            f"Unsupported OS distribution in profile {os_profile_name}: "
+            f"Unsupported OS distribution for machine {machine_name}: "
             f"{distribution!r}"
         )
 

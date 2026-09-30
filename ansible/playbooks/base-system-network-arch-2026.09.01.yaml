@@ -1,0 +1,238 @@
+---
+- name: Configure base network - Arch 2026.09.01
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  vars_files:
+    - ../../secrets/local.yaml
+
+  vars:
+    arch_pacman_base_url: >-
+      http://10.10.10.1:81/ai-stores/vault/linux/arch/pacman/2026.09.29
+
+    arch_network_packages:
+      - repository: extra
+        filename: ell-0.83-1-x86_64.pkg.tar.zst
+      - repository: extra
+        filename: iwd-3.12-2-x86_64.pkg.tar.zst
+
+  tasks:
+    - name: Require Arch Linux
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Archlinux"
+        fail_msg: >-
+          Expected Arch Linux; found
+          {{ ansible_distribution }} {{ ansible_distribution_version }}
+
+    - name: Require Wi-Fi configuration
+      ansible.builtin.assert:
+        that:
+          - daedalus_network.wifi_mac is defined
+          - daedalus_network.wifi_mac | length > 0
+          - daedalus_network.wifi_pci_id is defined
+          - daedalus_network.wifi_pci_id | length > 0
+          - wifi is defined
+          - wifi.ssid is defined
+          - wifi.password is defined
+          - wifi.ssid | length > 0
+          - wifi.password | length > 0
+        fail_msg: "Wi-Fi hardware identity and credentials must be configured"
+      no_log: true
+
+    - name: Locate Wi-Fi interface by MAC address
+      ansible.builtin.shell:
+        cmd: |
+          for interface in /sys/class/net/*; do
+              [ -f "$interface/address" ] || continue
+              if [ "$(cat "$interface/address")" = "{{ daedalus_network.wifi_mac | lower }}" ]; then
+                  basename "$interface"
+                  exit 0
+              fi
+          done
+          exit 1
+      register: arch_wifi_interface_lookup
+      changed_when: false
+
+    - name: Record Wi-Fi interface
+      ansible.builtin.set_fact:
+        arch_wifi_interface: "{{ arch_wifi_interface_lookup.stdout }}"
+
+    - name: Create AI Forge package staging directory
+      ansible.builtin.file:
+        path: /var/cache/ai-forge/pacman
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Download Arch network packages from AI Stores
+      ansible.builtin.get_url:
+        url: >-
+          {{ arch_pacman_base_url }}/{{ item.repository }}/os/x86_64/{{
+          item.filename }}
+        dest: "/var/cache/ai-forge/pacman/{{ item.filename }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ arch_network_packages }}"
+
+    - name: Download Arch network package signatures from AI Stores
+      ansible.builtin.get_url:
+        url: >-
+          {{ arch_pacman_base_url }}/{{ item.repository }}/os/x86_64/{{
+          item.filename }}.sig
+        dest: "/var/cache/ai-forge/pacman/{{ item.filename }}.sig"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ arch_network_packages }}"
+
+    - name: Install Arch network packages
+      ansible.builtin.command:
+        argv:
+          - pacman
+          - -U
+          - --noconfirm
+          - /var/cache/ai-forge/pacman/ell-0.83-1-x86_64.pkg.tar.zst
+          - /var/cache/ai-forge/pacman/iwd-3.12-2-x86_64.pkg.tar.zst
+      register: arch_network_package_install
+      changed_when: >-
+        'reinstalling' not in arch_network_package_install.stdout
+        and 'there is nothing to do' not in arch_network_package_install.stdout
+
+    - name: Verify iwd installation
+      ansible.builtin.command:
+        argv:
+          - pacman
+          - -Q
+          - iwd
+      register: arch_iwd_package
+      changed_when: false
+
+    - name: Require approved iwd version
+      ansible.builtin.assert:
+        that:
+          - arch_iwd_package.stdout == "iwd 3.12-2"
+        fail_msg: >-
+          Unexpected iwd package: {{ arch_iwd_package.stdout }}
+
+    - name: Verify iwctl executable
+      ansible.builtin.stat:
+        path: /usr/bin/iwctl
+      register: arch_iwctl
+
+    - name: Require iwctl executable
+      ansible.builtin.assert:
+        that:
+          - arch_iwctl.stat.exists
+          - arch_iwctl.stat.executable
+        fail_msg: "Expected /usr/bin/iwctl from iwd package"
+
+    - name: Create iwd state directory
+      ansible.builtin.file:
+        path: /var/lib/iwd
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Remove obsolete iwd configuration profile
+      ansible.builtin.file:
+        path: "/etc/iwd/{{ wifi.ssid }}.psk"
+        state: absent
+      no_log: true
+
+    - name: Check for existing iwd Wi-Fi profile
+      ansible.builtin.stat:
+        path: "/var/lib/iwd/{{ wifi.ssid }}.psk"
+      register: arch_iwd_wifi_profile
+      no_log: true
+
+    - name: Create initial iwd Wi-Fi profile
+      ansible.builtin.copy:
+        dest: "/var/lib/iwd/{{ wifi.ssid }}.psk"
+        owner: root
+        group: root
+        mode: "0600"
+        content: |
+          [Security]
+          Passphrase={{ wifi.password }}
+      when: not arch_iwd_wifi_profile.stat.exists
+      no_log: true
+      notify: Restart iwd
+
+    - name: Install systemd-networkd Wi-Fi configuration
+      ansible.builtin.copy:
+        dest: /etc/systemd/network/30-ai-forge-wifi.network
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Match]
+          MACAddress={{ daedalus_network.wifi_mac }}
+
+          [Network]
+          DHCP=yes
+
+          [Link]
+          RequiredForOnline=no
+      notify: Reload networkd
+
+    - name: Enable and start iwd
+      ansible.builtin.systemd_service:
+        name: iwd.service
+        enabled: true
+        state: started
+
+    - name: Flush network handlers
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for Wi-Fi IPv4 address
+      ansible.builtin.command:
+        argv:
+          - ip
+          - -4
+          - -o
+          - addr
+          - show
+          - dev
+          - "{{ arch_wifi_interface }}"
+      register: arch_wifi_address
+      changed_when: false
+      retries: 20
+      delay: 3
+      until: arch_wifi_address.stdout | length > 0
+
+    - name: Verify Wi-Fi Internet connectivity
+      ansible.builtin.command:
+        argv:
+          - ping
+          - -I
+          - "{{ arch_wifi_interface }}"
+          - -c
+          - "2"
+          - -W
+          - "3"
+          - "1.1.1.1"
+      changed_when: false
+
+    - name: Report Arch network package state
+      ansible.builtin.debug:
+        msg:
+          - "Wi-Fi interface: {{ arch_wifi_interface }}"
+          - "Wi-Fi MAC: {{ daedalus_network.wifi_mac }}"
+          - "iwd package: {{ arch_iwd_package.stdout }}"
+          - "AI Stores snapshot: 2026.09.29"
+
+  handlers:
+    - name: Restart iwd
+      ansible.builtin.systemd_service:
+        name: iwd.service
+        state: restarted
+
+    - name: Reload networkd
+      ansible.builtin.systemd_service:
+        name: systemd-networkd.service
+        state: restarted
