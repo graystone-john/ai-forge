@@ -57,7 +57,51 @@ echo "Validating configuration..."
 
 echo
 echo "Deploying configuration..."
-"$ROOT/scripts/generate.py" "$MACHINE" --deploy
+# Deploy the generated files that just passed validation.
+python3 - "$ROOT" "$MACHINE" <<'PY'
+from pathlib import Path
+import shutil
+import sys
+import yaml
+
+root = Path(sys.argv[1])
+machine_name = sys.argv[2]
+
+machine = yaml.safe_load(
+    (root / "machines" / machine_name / "machine.yaml").read_text(
+        encoding="utf-8"
+    )
+)
+distribution = machine["os"]["distribution"]
+
+generated = root / "generated" / machine_name
+http_root = root / "runtime" / "http"
+machine_http = http_root / machine_name
+
+files = [
+    (generated / "boot.ipxe", http_root / "boot.ipxe"),
+    (generated / "normal.ipxe", machine_http / "normal.ipxe"),
+    (generated / "provision.ipxe", machine_http / "provision.ipxe"),
+]
+
+if distribution == "ubuntu":
+    files.extend(
+        (generated / name, machine_http / name)
+        for name in ("user-data", "meta-data", "vendor-data")
+    )
+elif distribution != "arch":
+    raise SystemExit(f"Unsupported OS distribution: {distribution!r}")
+
+for source, destination in files:
+    if not source.is_file():
+        raise SystemExit(f"Missing generated file: {source}")
+
+machine_http.mkdir(parents=True, exist_ok=True)
+
+for source, destination in files:
+    shutil.copy2(source, destination)
+    print(f"Deployed {destination}")
+PY
 
 if [[ "$IS_ARCH" == "yes" ]]; then
     ARCH_GENERATED="$ROOT/generated/$MACHINE/arch"

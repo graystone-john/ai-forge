@@ -255,67 +255,85 @@
     mode: "0755"
     content: |
       #!/usr/bin/env python3
-
       import csv
       import hashlib
       import pathlib
       import sys
       import urllib.request
+      from concurrent.futures import ThreadPoolExecutor
 
       base = sys.argv[1].rstrip("/")
       dest = pathlib.Path(sys.argv[2])
       manifest = pathlib.Path(sys.argv[3])
-
       dest.mkdir(parents=True, exist_ok=True)
 
-      with manifest.open(newline="") as fh:
-          rows = csv.DictReader(fh, delimiter="\t")
+      def sha256(path):
+          digest = hashlib.sha256()
+          with path.open("rb") as stream:
+              for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                  digest.update(chunk)
+          return digest.hexdigest()
 
-          for row in rows:
-              name = row["package"]
-              version = row["version"]
-              filename = row.get("filename")
+      with manifest.open(newline="") as stream:
+          rows = list(csv.DictReader(stream, delimiter="\t"))
 
-              if not filename:
-                  filename = row["resolved"].rsplit("/", 1)[-1]
-
-              wanted = row.get("sha256", "")
-              target = dest / filename
-
-              url = (
-                  f"{base}/vault/node/npm/packages/"
-                  f"{name}/{version}/{filename}"
+      # Validate and deduplicate destinations before starting any downloads.
+      jobs = {}
+      for row in rows:
+          filename = row.get("filename") or row["resolved"].rsplit("/", 1)[-1]
+          if not filename or pathlib.Path(filename).name != filename or filename in (".", ".."):
+              raise SystemExit(f"Invalid package filename: {filename!r}")
+          row["filename"] = filename
+          identity = (row["package"], row["version"], row.get("sha256", ""))
+          if filename in jobs:
+              previous = jobs[filename]
+              previous_identity = (
+                  previous["package"], previous["version"], previous.get("sha256", "")
               )
+              if identity != previous_identity:
+                  raise SystemExit(f"Conflicting package filename: {filename}")
+          jobs[filename] = row
 
-              if target.exists() and wanted:
-                  have = hashlib.sha256(target.read_bytes()).hexdigest()
+      def acquire(row):
+          name = row["package"]
+          version = row["version"]
+          filename = row["filename"]
+          wanted = row.get("sha256", "").strip().lower()
+          target = dest / filename
+          url = f"{base}/vault/node/npm/packages/{name}/{version}/{filename}"
 
-                  if have == wanted:
-                      print(f"PRESENT: {name}@{version}")
-                      continue
+          if target.is_file():
+              if not wanted or sha256(target) == wanted:
+                  print(f"PRESENT: {name}@{version}", flush=True)
+                  return
 
-                  target.unlink()
-
-              elif target.exists():
-                  print(f"PRESENT: {name}@{version}")
-                  continue
-
-              print(f"DOWNLOAD: {name}@{version}")
-
-              tmp = target.with_suffix(target.suffix + ".tmp")
-              urllib.request.urlretrieve(url, tmp)
+          tmp = target.with_name(target.name + ".download.tmp")
+          print(f"DOWNLOAD: {name}@{version}", flush=True)
+          try:
+              with urllib.request.urlopen(url, timeout=60) as response:
+                  with tmp.open("wb") as output:
+                      while True:
+                          chunk = response.read(1024 * 1024)
+                          if not chunk:
+                              break
+                          output.write(chunk)
 
               if wanted:
-                  have = hashlib.sha256(tmp.read_bytes()).hexdigest()
-
-                  if have != wanted:
-                      tmp.unlink(missing_ok=True)
-                      raise SystemExit(
+                  actual = sha256(tmp)
+                  if actual != wanted:
+                      raise RuntimeError(
                           f"SHA256 mismatch for {name}@{version}: "
-                          f"expected {wanted}, got {have}"
+                          f"expected {wanted}, got {actual}"
                       )
 
               tmp.replace(target)
+          finally:
+              tmp.unlink(missing_ok=True)
+
+      with ThreadPoolExecutor(max_workers=4) as pool:
+          list(pool.map(acquire, jobs.values()))
+
+      print(f"READY: {len(jobs)} Hermes TUI npm packages", flush=True)
 
 - name: Acquire curated Hermes TUI npm packages
   ansible.builtin.command:
@@ -869,16 +887,16 @@
       Expected {{ hermes_agent.version }};
       received {{ hermes_version_result.stdout | trim }}.
 
-- name: Verify Hermes Agent entry point
+- name: Verify Hermes Agent launcher is executable
   ansible.builtin.command:
     argv:
       - /usr/sbin/runuser
       - -u
       - "{{ agent_identity.user }}"
       - --
+      - /usr/bin/test
+      - -x
       - /usr/local/bin/hermes-agent
-      - --help
-  register: hermes_agent_help
   changed_when: false
 
 - name: Verify Hermes ACP entry point

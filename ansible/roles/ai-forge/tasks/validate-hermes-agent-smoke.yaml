@@ -1,0 +1,52 @@
+---
+- name: Run one text request through Hermes
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/sudo
+      - -H
+      - -u
+      - "{{ inference.operational_user }}"
+      - --
+      - /usr/bin/env
+      - NO_COLOR=1
+      - /usr/bin/timeout
+      - --signal=TERM
+      - --kill-after=5s
+      - 45s
+      - /usr/local/bin/hermes
+      - chat
+      - --cli
+      - --quiet
+      - --oneshot
+      - --in
+      - "{{ inference.operational_home }}"
+      - --query
+      - "What is 2 + 2? Reply with only the digit. Do not use tools."
+      - --run-budget
+      - "30"
+      - --max-turns
+      - "1"
+    chdir: "{{ inference.operational_home }}"
+  become: true
+  become_user: root
+  environment:
+    HOME: "{{ inference.operational_home }}"
+    NO_COLOR: "1"
+  register: hermes_smoke_result
+  changed_when: false
+  failed_when: false
+
+- name: Require correct Hermes response
+  ansible.builtin.assert:
+    that:
+      - hermes_smoke_result.rc | default(-1) == 0
+      - (hermes_smoke_result.stdout | default('')) is search('(?m)^\s*4\s*$')
+    fail_msg: >-
+      Hermes smoke test failed.
+      Exit={{ hermes_smoke_result.rc | default(-1) }}
+      Elapsed={{ hermes_smoke_result.delta | default('unknown') }}
+      Stdout={{ hermes_smoke_result.stdout | default('') }}
+      Stderr={{ hermes_smoke_result.stderr | default('') }}
+    success_msg: >-
+      Hermes smoke test passed.
+      Elapsed={{ hermes_smoke_result.delta | default('unknown') }}

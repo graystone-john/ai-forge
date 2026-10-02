@@ -1,5 +1,5 @@
 ---
-- name: Validate AI Node
+- name: Smoke Test AI Node
   hosts: daedalus
   gather_facts: true
   become: true
@@ -11,14 +11,14 @@
   pre_tasks:
     - name: Report AI Forge stage start
       ansible.builtin.debug:
-        msg: "AI_FORGE_STEP_START name=validate-ai-node machine={{ inventory_hostname }}"
+        msg: "AI_FORGE_STEP_START name=validate-ai-node-smoke machine={{ inventory_hostname }}"
 
   roles:
     - role: ai-forge
       vars:
-        ai_forge_stage: validate-ai-node
+        ai_forge_stage: validate-ai-node-smoke
 
   post_tasks:
     - name: Report AI Forge stage complete
       ansible.builtin.debug:
-        msg: "AI_FORGE_STEP_COMPLETE name=validate-ai-node machine={{ inventory_hostname }}"
+        msg: "AI_FORGE_STEP_COMPLETE name=validate-ai-node-smoke machine={{ inventory_hostname }}"

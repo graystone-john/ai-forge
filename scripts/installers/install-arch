@@ -227,6 +227,7 @@ def main():
     pacman_config_path.write_text(
         "[options]\n"
         "Architecture = auto\n"
+        "ParallelDownloads = 4\n"
         "SigLevel = Required DatabaseOptional\n"
         "LocalFileSigLevel = Optional\n"
         "\n"
