@@ -1,0 +1,99 @@
+---
+- name: Query installed Arch system Python package
+  ansible.builtin.command:
+    argv:
+      - pacman
+      - -Q
+      - python
+  register: coding_agent_arch_python
+  changed_when: false
+
+- name: Require approved Arch system Python package
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - coding_agent_arch_python.stdout == "python 3.14.7-1"
+    fail_msg: >-
+      Unexpected Arch system Python package:
+      {{ coding_agent_arch_python.stdout }};
+      expected python 3.14.7-1
+
+- name: Define Aider Python runtime
+  ansible.builtin.set_fact:
+    coding_agent_python_version: "3.12.14"
+    coding_agent_python_release: "20260825"
+    coding_agent_python_sha256: "7ce4a71285d913955a76053cc7605ea96da8ecada54dba9cf395245961816421"
+    coding_agent_python_root: "/opt/ai-forge/python/3.12.14"
+    coding_agent_python_archive: >-
+      {{ playbook_dir }}/../../../ai-stores/vault/python/runtimes/astral/python-build-standalone/releases/20260825/cpython-3.12.14+20260825-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz
+
+- name: Check Aider Python runtime archive on Athena
+  ansible.builtin.stat:
+    path: "{{ coding_agent_python_archive }}"
+    checksum_algorithm: sha256
+  register: coding_agent_python_archive_state
+  delegate_to: localhost
+  become: false
+
+- name: Require pinned Aider Python runtime
+  ansible.builtin.assert:
+    that:
+      - coding_agent_python_archive_state.stat.exists
+      - >-
+        coding_agent_python_archive_state.stat.checksum | default('') ==
+        coding_agent_python_sha256
+    fail_msg: >-
+      Missing or changed Aider Python runtime:
+      {{ coding_agent_python_archive }}
+
+- name: Check installed Aider Python runtime
+  ansible.builtin.stat:
+    path: "{{ coding_agent_python_root }}/bin/python3.12"
+  register: coding_agent_python_installed
+
+- name: Create Aider Python runtime parent
+  ansible.builtin.file:
+    path: "/opt/ai-forge/python"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create Aider Python runtime directory
+  ansible.builtin.file:
+    path: "{{ coding_agent_python_root }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not coding_agent_python_installed.stat.exists
+
+- name: Install Aider Python runtime from AI Stores
+  ansible.builtin.unarchive:
+    src: "{{ coding_agent_python_archive }}"
+    dest: "{{ coding_agent_python_root }}"
+    extra_opts:
+      - --strip-components=1
+    owner: root
+    group: root
+  when: not coding_agent_python_installed.stat.exists
+
+- name: Verify Aider Python runtime version
+  ansible.builtin.command:
+    argv:
+      - "{{ coding_agent_python_root }}/bin/python3.12"
+      - --version
+  register: coding_agent_python_version_result
+  changed_when: false
+
+- name: Require Aider Python runtime version
+  ansible.builtin.assert:
+    quiet: true
+    that:
+      - >-
+        coding_agent_python_version_result.stdout ==
+        "Python " ~ coding_agent_python_version
+
+- name: Select Arch coding-agent Python
+  ansible.builtin.set_fact:
+    coding_agent_python: "{{ coding_agent_python_root }}/bin/python3.12"

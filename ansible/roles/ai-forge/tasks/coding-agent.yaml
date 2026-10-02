@@ -16,67 +16,45 @@
     - "{{ ai_forge_root }}"
     - "/opt/ai-forge/venvs"
 
-- name: Install dedicated AI Stores APT source for coding tools
-  ansible.builtin.copy:
-    dest: "{{ ai_stores_apt_source }}"
-    owner: root
-    group: root
-    mode: "0644"
-    content: |
-      deb [trusted=yes] {{ coding_agent.apt_repository }} noble main
+- name: Prepare Ubuntu coding-agent dependencies
+  ansible.builtin.include_tasks:
+    file: coding-agent-dependencies-ubuntu.yaml
+  when: ansible_distribution == "Ubuntu"
 
-- name: Refresh AI Stores APT metadata only
+- name: Prepare Arch coding-agent dependencies
+  ansible.builtin.include_tasks:
+    file: coding-agent-dependencies-arch.yaml
+  when: ansible_distribution == "Archlinux"
+
+- name: Require supported coding-agent distribution
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution in ["Ubuntu", "Archlinux"]
+    fail_msg: >-
+      Unsupported coding-agent distribution:
+      {{ ansible_distribution }}
+
+- name: Read existing Aider virtual environment Python
   ansible.builtin.command:
     argv:
-      - apt-get
-      - -o
-      - "Dir::Etc::sourcelist={{ ai_stores_apt_source }}"
-      - -o
-      - "Dir::Etc::sourceparts=-"
-      - -o
-      - "APT::Get::List-Cleanup=0"
-      - update
-  changed_when: false
-
-- name: Check whether Python venv support is installed
-  ansible.builtin.command:
-    argv:
-      - dpkg-query
-      - -W
-      - "-f=${Status}"
-      - "python{{ coding_agent.python_version }}-venv"
-  register: python_venv_package_status
+      - "{{ aider_venv }}/bin/python"
+      - --version
+  register: aider_venv_python
   changed_when: false
   failed_when: false
 
-- name: Install Python venv support from AI Stores only
-  ansible.builtin.command:
-    argv:
-      - apt-get
-      - -y
-      - -o
-      - "Dir::Etc::sourcelist={{ ai_stores_apt_source }}"
-      - -o
-      - "Dir::Etc::sourceparts=-"
-      - install
-      - "python{{ coding_agent.python_version }}-venv"
-  when: "'install ok installed' not in python_venv_package_status.stdout"
-
-- name: Check existing Aider virtual environment
-  ansible.builtin.stat:
-    path: "{{ aider_venv }}/bin/python"
-  register: aider_venv_python
-
-- name: Remove incomplete Aider virtual environment
+- name: Remove incompatible Aider virtual environment
   ansible.builtin.file:
     path: "{{ aider_venv }}"
     state: absent
-  when: not aider_venv_python.stat.exists
+  when:
+    - aider_venv_python.rc != 0 or
+      coding_agent.python_version not in aider_venv_python.stdout
 
 - name: Create Aider virtual environment
   ansible.builtin.command:
     argv:
-      - "python{{ coding_agent.python_version }}"
+      - "{{ coding_agent_python }}"
       - -m
       - venv
       - "{{ aider_venv }}"
@@ -210,6 +188,7 @@
       - --global
       - init.defaultBranch
       - main
+    chdir: "/home/{{ agent_identity.user }}"
   changed_when: false
 
 - name: Install Aider configuration for agent identity

@@ -1,0 +1,50 @@
+---
+- name: Install dedicated AI Stores APT source for coding tools
+  ansible.builtin.copy:
+    dest: "{{ ai_stores_apt_source }}"
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      deb [trusted=yes] {{ coding_agent.apt_repository }} noble main
+
+- name: Refresh AI Stores APT metadata only
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - -o
+      - "Dir::Etc::sourcelist={{ ai_stores_apt_source }}"
+      - -o
+      - "Dir::Etc::sourceparts=-"
+      - -o
+      - "APT::Get::List-Cleanup=0"
+      - update
+  changed_when: false
+
+- name: Check whether Python venv support is installed
+  ansible.builtin.command:
+    argv:
+      - dpkg-query
+      - -W
+      - "-f=${Status}"
+      - "python{{ coding_agent.python_version }}-venv"
+  register: python_venv_package_status
+  changed_when: false
+  failed_when: false
+
+- name: Install Python venv support from AI Stores only
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - -y
+      - -o
+      - "Dir::Etc::sourcelist={{ ai_stores_apt_source }}"
+      - -o
+      - "Dir::Etc::sourceparts=-"
+      - install
+      - "python{{ coding_agent.python_version }}-venv"
+  when: "'install ok installed' not in python_venv_package_status.stdout"
+
+- name: Select Ubuntu coding-agent Python
+  ansible.builtin.set_fact:
+    coding_agent_python: "python{{ coding_agent.python_version }}"

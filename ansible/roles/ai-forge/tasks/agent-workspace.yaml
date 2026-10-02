@@ -69,6 +69,7 @@
     test "$(sudo -u {{ agent_identity.user }} -H git config --global user.email)" = "{{ agent_identity.email }}"
   args:
     executable: /bin/bash
+    chdir: "/home/{{ agent_identity.user }}"
   changed_when: false
 
 - name: Verify agent workspace repository status

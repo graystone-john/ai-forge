@@ -1,9 +1,20 @@
 ---
+- name: Define approved kernel for validation
+  ansible.builtin.set_fact:
+    ai_forge_expected_kernel: >-
+      {{
+        '7.2.7-arch1-1'
+        if ansible_distribution == 'Archlinux'
+        else daedalus_kernel.version
+      }}
+
 - name: Verify approved kernel
   ansible.builtin.assert:
     that:
-      - ansible_kernel == daedalus_kernel.version
-    fail_msg: "Unexpected kernel: {{ ansible_kernel }}; expected {{ daedalus_kernel.version }}"
+      - ansible_kernel == ai_forge_expected_kernel
+    fail_msg: >-
+      Unexpected kernel: {{ ansible_kernel }};
+      expected {{ ai_forge_expected_kernel }}
 
 - name: Verify NVIDIA GPU
   ansible.builtin.command:
