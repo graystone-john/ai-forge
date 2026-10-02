@@ -19,7 +19,7 @@ echo Loading Ubuntu kernel...
 
 set semi:hex 3b
 
-kernel ${boot_base}/vmlinuz initrd=initrd ip=dhcp url=${iso_url} autoinstall ds=nocloud-net${semi:string}s=http://${server}/pxe/{{ machine_name }}/ nomodeset
+kernel ${boot_base}/vmlinuz initrd=initrd ip=dhcp cloud-config-url=/dev/null url=${iso_url} autoinstall ds=nocloud-net${semi:string}s=http://${server}/pxe/{{ machine_name }}/ nomodeset
 
 echo Loading Ubuntu initrd...
 initrd --name initrd ${boot_base}/initrd
