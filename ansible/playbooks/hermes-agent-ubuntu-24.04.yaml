@@ -7,4 +7,4 @@
   roles:
     - role: ai-forge
       vars:
-        ai_forge_stage: hermes-agent
+        ai_forge_stage: hermes-agent-ubuntu

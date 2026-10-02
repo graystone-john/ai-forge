@@ -1,0 +1,10 @@
+---
+- name: Configure Hermes Agent - Arch 2026.09.01
+  hosts: local_ai_coding_node
+  gather_facts: true
+  become: true
+
+  roles:
+    - role: ai-forge
+      vars:
+        ai_forge_stage: hermes-agent-arch

@@ -25,7 +25,7 @@
       - hermes_large_context_command.stat.executable
     fail_msg: >-
       Hermes base installation is missing.
-      Run playbooks/hermes-agent.yaml first.
+      Run the OS-specific Hermes Agent playbook first.
 
 - name: Define Muse Glimmer DFlash paths
   ansible.builtin.set_fact:
