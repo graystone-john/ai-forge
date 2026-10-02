@@ -366,56 +366,50 @@
     mode: "0755"
     content: |
       #!/usr/bin/env python3
-
       import csv
       import pathlib
       import subprocess
       import sys
+      from concurrent.futures import ThreadPoolExecutor
 
       npm = sys.argv[1]
-      cache = pathlib.Path(sys.argv[2])
-      tarballs = pathlib.Path(sys.argv[3])
+      cache = pathlib.Path(sys.argv[2]).resolve()
+      tarballs = pathlib.Path(sys.argv[3]).resolve()
       manifest = pathlib.Path(sys.argv[4])
 
       cache.mkdir(parents=True, exist_ok=True)
 
-      count = 0
+      with manifest.open(newline="") as stream:
+          rows = list(csv.DictReader(stream, delimiter="\t"))
 
-      with manifest.open(newline="") as fh:
-          rows = csv.DictReader(fh, delimiter="\t")
+      jobs = {}
+      for row in rows:
+          filename = row.get("filename") or row["resolved"].rsplit("/", 1)[-1]
+          if not filename or pathlib.Path(filename).name != filename:
+              raise SystemExit(f"Invalid npm tarball filename: {filename!r}")
+          tgz = tarballs / filename
+          if not tgz.is_file():
+              raise SystemExit(f"Missing curated npm tarball: {tgz}")
+          jobs[str(tgz)] = f'{row["package"]}@{row["version"]}'
 
-          for row in rows:
-              filename = row.get("filename")
-
-              if not filename:
-                  filename = row["resolved"].rsplit("/", 1)[-1]
-
-              package = row["package"]
-              version = row["version"]
-              tgz = tarballs / filename
-
-              if not tgz.is_file():
-                  raise SystemExit(
-                      f"Missing curated npm tarball: {tgz}"
-                  )
-
-              print(f"CACHE: {package}@{version}")
-
-              subprocess.run(
-                  [
-                      npm,
-                      "cache",
-                      "add",
-                      "--cache",
-                      str(cache),
-                      str(tgz),
-                  ],
-                  check=True,
+      def seed(job):
+          tgz, label = job
+          result = subprocess.run(
+              [npm, "cache", "add", "--offline", "--cache", str(cache), tgz],
+              text=True,
+              capture_output=True,
+          )
+          if result.returncode:
+              raise RuntimeError(
+                  f"Cache seeding failed for {label}:\n"
+                  f"{result.stdout}\n{result.stderr}"
               )
+          print(f"CACHE: {label}", flush=True)
 
-              count += 1
+      with ThreadPoolExecutor(max_workers=4) as pool:
+          list(pool.map(seed, jobs.items()))
 
-      print(f"CACHED: {count} Hermes TUI npm packages")
+      print(f"CACHED: {len(jobs)} Hermes TUI npm packages", flush=True)
 
 - name: Check Hermes TUI npm dependency tree
   ansible.builtin.command:
