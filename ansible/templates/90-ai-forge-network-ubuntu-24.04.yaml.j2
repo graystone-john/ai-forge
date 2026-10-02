@@ -3,6 +3,9 @@ network:
 
   ethernets:
     {{ provisioning.interface }}:
+      match:
+        macaddress: "{{ provisioning.mac }}"
+      set-name: "{{ provisioning.interface }}"
       dhcp4: true
       dhcp-identifier: mac
       critical: false

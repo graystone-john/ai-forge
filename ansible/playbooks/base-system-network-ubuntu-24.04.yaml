@@ -8,6 +8,34 @@
     - ../../secrets/local.yaml
 
   tasks:
+    - name: Ensure systemd network configuration directory
+      ansible.builtin.file:
+        path: /etc/systemd/network
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Preserve Wi-Fi interface name by MAC
+      ansible.builtin.copy:
+        dest: /etc/systemd/network/10-ai-forge-wifi.link
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Match]
+          MACAddress={{ daedalus_network.wifi_mac }}
+
+          [Link]
+          NamePolicy=
+          Name={{ daedalus_network.wifi_interface }}
+      register: ubuntu_wifi_link
+
+    - name: Include network naming rules in initramfs
+      ansible.builtin.command:
+        cmd: update-initramfs -u -k all
+      when: ubuntu_wifi_link.changed
+
     - name: Install AI Forge network configuration
       ansible.builtin.template:
         src: ../templates/90-ai-forge-network-ubuntu-24.04.yaml.j2

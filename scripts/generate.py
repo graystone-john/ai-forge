@@ -95,6 +95,9 @@ def main():
         image = forge["images"]["ubuntu"][ubuntu_version]
 
         context.update({
+            "provisioning_interface": machine["network"]["provisioning_interface"],
+            "wifi_interface": machine["network"]["wifi_interface"],
+            "wifi_mac": machine["network"]["wifi_mac"],
             "ubuntu_version": ubuntu_version,
             "ubuntu_iso": image["iso"],
             "ubuntu_boot_base_url": image["boot_base_url"],

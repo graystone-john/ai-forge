@@ -26,6 +26,19 @@ bootcmd:
 autoinstall:
   version: 1
 
+  network:
+    version: 2
+    ethernets:
+      {{ provisioning_interface }}:
+        match:
+          macaddress: "{{ provisioning_mac }}"
+        set-name: "{{ provisioning_interface }}"
+        dhcp4: true
+        dhcp-identifier: mac
+        optional: true
+        dhcp4-overrides:
+          use-routes: false
+
   apt:
     geoip: false
     fallback: offline-install
@@ -100,6 +113,19 @@ autoinstall:
   updates: security
 
   late-commands:
+    # Establish Wi-Fi naming before the installed system's first boot.
+    - mkdir -p /target/etc/systemd/network
+    - |
+      cat > /target/etc/systemd/network/10-ai-forge-wifi.link <<'EOF'
+      [Match]
+      MACAddress={{ wifi_mac }}
+
+      [Link]
+      NamePolicy=
+      Name={{ wifi_interface }}
+      EOF
+    - chmod 0644 /target/etc/systemd/network/10-ai-forge-wifi.link
+    - curtin in-target --target=/target -- update-initramfs -u -k all
     - curtin in-target --target=/target -- systemctl enable ssh.service
 
     # Keep the installed system from waiting on the public Snap Store.
