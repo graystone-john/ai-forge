@@ -1,0 +1,78 @@
+---
+- name: Prepare daedalus-01 accelerator mount
+  when: inventory_hostname == 'daedalus-01'
+  block:
+    - name: Find existing accelerator filesystem
+      ansible.builtin.command:
+        argv:
+          - blkid
+          - -U
+          - 87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c
+      register: accelerator_device
+      changed_when: false
+      failed_when: false
+
+    - name: Mount available accelerator
+      when:
+        - accelerator_device.rc == 0
+        - accelerator_device.stdout | trim | length > 0
+      block:
+        - name: Inspect existing mount
+          ansible.builtin.command:
+            argv:
+              - findmnt
+              - --noheadings
+              - --raw
+              - --output
+              - UUID
+              - --mountpoint
+              - /mnt/ai-stores-accelerator
+          register: accelerator_existing_mount
+          changed_when: false
+          failed_when: false
+
+        - name: Reject a different filesystem at accelerator mount
+          ansible.builtin.assert:
+            that:
+              - >-
+                accelerator_existing_mount.rc == 1 or
+                (accelerator_existing_mount.rc == 0 and
+                 accelerator_existing_mount.stdout | trim ==
+                 '87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c')
+            fail_msg: "Accelerator mount is occupied or could not be inspected."
+
+        - name: Create accelerator mount directory
+          ansible.builtin.file:
+            path: /mnt/ai-stores-accelerator
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Persist accelerator mount
+          ansible.builtin.lineinfile:
+            path: /etc/fstab
+            regexp: '^\S+\s+/mnt/ai-stores-accelerator\s+'
+            line: >-
+              UUID=87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c
+              /mnt/ai-stores-accelerator ext4
+              defaults,nofail,x-systemd.device-timeout=5s 0 2
+            backup: true
+          register: accelerator_fstab
+
+        - name: Reload mount configuration
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+          when: accelerator_fstab.changed
+
+        - name: Mount accelerator filesystem
+          ansible.builtin.command:
+            argv:
+              - mount
+              - /mnt/ai-stores-accelerator
+          when: accelerator_existing_mount.rc == 1
+
+    - name: Report absent accelerator
+      ansible.builtin.debug:
+        msg: "Accelerator filesystem unavailable; model acquisition will use Athena."
+      when: accelerator_device.rc != 0

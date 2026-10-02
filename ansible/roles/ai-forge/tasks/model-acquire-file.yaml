@@ -1,0 +1,77 @@
+---
+- name: Default to Athena for this artifact
+  ansible.builtin.set_fact:
+    accelerator_artifact_ready: false
+
+- name: Check accelerator artifact
+  when: model_accelerator_available | bool
+  block:
+    - name: Verify accelerator artifact SHA-256
+      ansible.builtin.stat:
+        path: "{{ model_accelerator_directory }}/{{ item.filename }}"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: accelerator_artifact
+
+    - name: Record accelerator artifact eligibility
+      ansible.builtin.set_fact:
+        accelerator_artifact_ready: >-
+          {{
+            accelerator_artifact.stat.isreg | default(false)
+            and
+            accelerator_artifact.stat.checksum | default('') == item.sha256
+          }}
+
+  rescue:
+    - name: Report accelerator verification failure
+      ansible.builtin.debug:
+        msg: "Could not verify {{ item.filename }} on accelerator; using Athena."
+
+- name: Acquire verified artifact from accelerator
+  when: accelerator_artifact_ready | bool
+  block:
+    - name: Copy accelerator artifact to model cache
+      ansible.builtin.copy:
+        src: "{{ model_accelerator_directory }}/{{ item.filename }}"
+        dest: "{{ item.destination }}"
+        remote_src: true
+        owner: "{{ inference.operational_user }}"
+        group: "{{ inference.operational_user }}"
+        mode: "0644"
+
+    - name: Verify model cache SHA-256
+      ansible.builtin.stat:
+        path: "{{ item.destination }}"
+        checksum_algorithm: sha256
+        get_checksum: true
+      register: accelerator_destination
+
+    - name: Require verified local copy
+      ansible.builtin.assert:
+        that:
+          - accelerator_destination.stat.checksum | default('') == item.sha256
+        fail_msg: "Accelerator copy failed SHA-256 verification."
+
+  rescue:
+    - name: Fall back to Athena
+      ansible.builtin.set_fact:
+        accelerator_artifact_ready: false
+
+- name: Acquire artifact from Athena
+  ansible.builtin.get_url:
+    url: >-
+      {{ model.endpoint | regex_replace('/+$', '') }}/{{
+      model.hf_repo }}/revisions/{{ model.revision }}/{{ item.filename }}
+    dest: "{{ item.destination }}"
+    checksum: "sha256:{{ item.sha256 }}"
+    owner: "{{ inference.operational_user }}"
+    group: "{{ inference.operational_user }}"
+    mode: "0644"
+    timeout: 120
+  when: not (accelerator_artifact_ready | bool)
+
+- name: Report artifact source
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.filename }}:
+      {{ 'AI Stores Accelerator' if accelerator_artifact_ready | bool else 'Athena' }}

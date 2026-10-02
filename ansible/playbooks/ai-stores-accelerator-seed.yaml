@@ -1,0 +1,78 @@
+---
+- name: Seed AI Stores Accelerator
+  hosts: daedalus-01
+  become: true
+  gather_facts: false
+
+  vars_files:
+    - "../profiles/inference/{{ inference_profile }}.yaml"
+
+  vars:
+    accelerator_mount: /mnt/ai-stores-accelerator
+    accelerator_uuid: 87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c
+    accelerator_model_dir: >-
+      {{ accelerator_mount }}/vault/huggingface/{{
+      model.hf_repo }}/revisions/{{ model.revision }}
+
+  tasks:
+    - name: Read mounted accelerator identity
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --noheadings
+          - --raw
+          - --output
+          - UUID
+          - --mountpoint
+          - "{{ accelerator_mount }}"
+      register: accelerator_identity
+      changed_when: false
+
+    - name: Require the expected accelerator filesystem
+      ansible.builtin.assert:
+        that:
+          - accelerator_identity.stdout | trim == accelerator_uuid
+        fail_msg: "Expected accelerator SSD is not mounted; refusing to seed."
+
+    - name: Create accelerator model directory
+      ansible.builtin.file:
+        path: "{{ accelerator_model_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Create accelerator download staging directory
+      ansible.builtin.file:
+        path: "{{ accelerator_mount }}/.downloads"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Seed verified model and projector from Athena
+      ansible.builtin.get_url:
+        url: >-
+          {{ model.endpoint | regex_replace('/+$', '') }}/{{
+          model.hf_repo }}/revisions/{{ model.revision }}/{{ item.filename }}
+        dest: "{{ accelerator_model_dir }}/{{ item.filename }}"
+        tmp_dest: "{{ accelerator_mount }}/.downloads"
+        checksum: "sha256:{{ item.sha256 }}"
+        owner: root
+        group: root
+        mode: "0644"
+        timeout: 120
+        use_proxy: false
+      loop:
+        - filename: "{{ model.model_file }}"
+          sha256: "{{ model.model_checksum }}"
+        - filename: "{{ model.projector_file }}"
+          sha256: "{{ model.projector_checksum }}"
+      loop_control:
+        label: "{{ item.filename }}"
+
+    - name: Report accelerator seed completion
+      ansible.builtin.debug:
+        msg:
+          - "Model and projector seeded and SHA-256 verified."
+          - "Location: {{ accelerator_model_dir }}"

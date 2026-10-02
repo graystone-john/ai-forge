@@ -28,17 +28,38 @@
   ansible.builtin.debug:
     msg: "Model acquisition started: {{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
 
-- name: Acquire model and projector from AI Stores
-  ansible.builtin.get_url:
-    url: >-
-      {{ model.endpoint | regex_replace('/+$', '') }}/{{
-      model.hf_repo }}/revisions/{{ model.revision }}/{{ item.filename }}
-    dest: "{{ item.destination }}"
-    checksum: "sha256:{{ item.sha256 }}"
-    owner: "{{ inference.operational_user }}"
-    group: "{{ inference.operational_user }}"
-    mode: "0644"
-    timeout: 120
+- name: Prepare AI Stores Accelerator
+  ansible.builtin.include_tasks: ai-stores-accelerator-mount.yaml
+
+- name: Check mounted AI Stores Accelerator
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - --noheadings
+      - --raw
+      - --output
+      - UUID
+      - --mountpoint
+      - /mnt/ai-stores-accelerator
+  register: model_accelerator_mount
+  changed_when: false
+  failed_when: false
+
+- name: Define accelerator model source
+  ansible.builtin.set_fact:
+    model_accelerator_available: >-
+      {{
+        inventory_hostname == 'daedalus-01'
+        and model_accelerator_mount.rc == 0
+        and model_accelerator_mount.stdout | trim ==
+            '87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c'
+      }}
+    model_accelerator_directory: >-
+      /mnt/ai-stores-accelerator/vault/huggingface/{{
+      model.hf_repo }}/revisions/{{ model.revision }}
+
+- name: Acquire model and projector
+  ansible.builtin.include_tasks: model-acquire-file.yaml
   loop:
     - filename: "{{ model.model_file }}"
       destination: "{{ llama_model_blob }}"
@@ -48,7 +69,6 @@
       sha256: "{{ model.projector_checksum }}"
   loop_control:
     label: "{{ item.filename }}"
-  register: llama_model_acquisition
 
 - name: Create model snapshot links
   ansible.builtin.file:
