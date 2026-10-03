@@ -6,6 +6,7 @@ network:
       match:
         macaddress: "{{ provisioning.mac }}"
       set-name: "{{ provisioning.interface }}"
+      wakeonlan: true
       dhcp4: true
       dhcp-identifier: mac
       critical: false

@@ -20,6 +20,32 @@
           Expected Arch Linux; found
           {{ ansible_distribution }} {{ ansible_distribution_version }}
 
+    - name: Configure provisioning Ethernet Wake-on-LAN
+      tags: [wol]
+      block:
+        - name: Ensure systemd network directory
+          ansible.builtin.file:
+            path: /etc/systemd/network
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Persist magic-packet wake for provisioning Ethernet
+          ansible.builtin.copy:
+            dest: /etc/systemd/network/10-ai-forge-provisioning.link
+            owner: root
+            group: root
+            mode: "0644"
+            content: |
+              [Match]
+              MACAddress={{ provisioning.mac }}
+
+              [Link]
+              NamePolicy=
+              Name={{ provisioning.interface }}
+              WakeOnLan=magic
+
     - name: Require Wi-Fi configuration
       ansible.builtin.assert:
         that:
