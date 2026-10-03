@@ -1,0 +1,91 @@
+---
+- name: Seed Arch repositories on AI Stores Accelerator
+  hosts: daedalus-01
+  become: true
+  gather_facts: false
+
+  vars:
+    accelerator_mount: /mnt/ai-stores-accelerator
+    accelerator_uuid: 87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c
+    stores_root: "{{ playbook_dir }}/../../../ai-stores"
+    arch_repositories:
+      - vault/linux/arch/pacman/2026.09.29
+      - vault/graystone/playwright/dependencies/arch-playwright-1.62.1/20261002T021910.336597Z/pacman
+
+  tasks:
+    - name: Mount existing accelerator
+      ansible.builtin.include_tasks:
+        file: ../roles/ai-forge/tasks/ai-stores-accelerator-mount.yaml
+
+    - name: Read accelerator filesystem identity
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --noheadings
+          - --raw
+          - --output
+          - UUID
+          - --mountpoint
+          - "{{ accelerator_mount }}"
+      register: accelerator_identity
+      changed_when: false
+
+    - name: Require expected accelerator
+      ansible.builtin.assert:
+        that:
+          - accelerator_identity.stdout | trim == accelerator_uuid
+
+    - name: Check source repository databases
+      ansible.builtin.stat:
+        path: "{{ stores_root }}/{{ item.0 }}/{{ item.1 }}/os/x86_64/{{ item.1 }}.db"
+        follow: true
+        get_checksum: false
+      delegate_to: localhost
+      become: false
+      loop: "{{ arch_repositories | product(['core', 'extra']) | list }}"
+      register: arch_source_databases
+
+    - name: Require source repository databases
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg | default(false)
+        fail_msg: "Missing repository database: {{ item.item }}"
+        quiet: true
+      loop: "{{ arch_source_databases.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Create accelerator repository directories
+      ansible.builtin.file:
+        path: "{{ accelerator_mount }}/{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop: "{{ arch_repositories }}"
+
+    - name: Clear completion markers before seeding
+      ansible.builtin.file:
+        path: "{{ accelerator_mount }}/{{ item }}/.seed-complete"
+        state: absent
+      loop: "{{ arch_repositories }}"
+
+    - name: Copy Arch repositories from Athena
+      ansible.builtin.copy:
+        src: "{{ stores_root }}/{{ item }}/"
+        dest: "{{ accelerator_mount }}/{{ item }}/"
+        local_follow: true
+        owner: root
+        group: root
+        mode: "0644"
+        directory_mode: "0755"
+      loop: "{{ arch_repositories }}"
+
+    - name: Record completed repository seeds
+      ansible.builtin.copy:
+        dest: "{{ accelerator_mount }}/{{ item }}/.seed-complete"
+        content: "Repository copied from Athena: {{ item }}\n"
+        owner: root
+        group: root
+        mode: "0644"
+      loop: "{{ arch_repositories }}"

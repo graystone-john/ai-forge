@@ -1,0 +1,59 @@
+---
+- name: Default to Athena Pacman repository
+  ansible.builtin.set_fact:
+    accelerator_pacman_url: ""
+
+- name: Prepare local Pacman repository
+  when: inventory_hostname == 'daedalus-01'
+  block:
+    - name: Mount existing accelerator
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/../roles/ai-forge/tasks/ai-stores-accelerator-mount.yaml"
+
+    - name: Read accelerator filesystem identity
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --noheadings
+          - --raw
+          - --output
+          - UUID
+          - --mountpoint
+          - /mnt/ai-stores-accelerator
+      register: accelerator_pacman_mount
+      changed_when: false
+      failed_when: false
+
+    - name: Check seeded Pacman repository
+      ansible.builtin.stat:
+        path: "/mnt/ai-stores-accelerator/{{ accelerator_pacman_relative }}/{{ item }}"
+        follow: true
+        get_checksum: false
+      loop:
+        - .seed-complete
+        - core/os/x86_64/core.db
+        - extra/os/x86_64/extra.db
+      register: accelerator_pacman_files
+
+    - name: Enable matching local Pacman repository
+      ansible.builtin.set_fact:
+        accelerator_pacman_url: "file:///mnt/ai-stores-accelerator/{{ accelerator_pacman_relative }}"
+      when:
+        - accelerator_pacman_mount.rc == 0
+        - accelerator_pacman_mount.stdout | trim == '87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c'
+        - accelerator_pacman_remote | regex_replace('/+$', '') == 'http://10.10.10.1:81/ai-stores/' ~ accelerator_pacman_relative
+        - accelerator_pacman_files.results[0].stat.isreg | default(false)
+        - accelerator_pacman_files.results[1].stat.isreg | default(false)
+        - accelerator_pacman_files.results[2].stat.isreg | default(false)
+
+  rescue:
+    - name: Fall back to Athena Pacman repository
+      ansible.builtin.set_fact:
+        accelerator_pacman_url: ""
+
+- name: Report Pacman acquisition sources
+  ansible.builtin.debug:
+    msg: >-
+      {{ ('Accelerator first: ' ~ accelerator_pacman_url ~ '; Athena fallback')
+         if accelerator_pacman_url | length > 0
+         else 'Athena only' }}

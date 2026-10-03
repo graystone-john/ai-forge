@@ -31,16 +31,35 @@
           - provisioning_network_config.stat.exists
         fail_msg: "Expected Arch provisioning network configuration not found"
 
-    - name: Verify provisioning Ethernet exists
-      ansible.builtin.stat:
-        path: /sys/class/net/{{ provisioning.interface }}
-      register: provisioning_nic
+    - name: Locate provisioning Ethernet by MAC
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - |
+            from pathlib import Path
+            import sys
 
-    - name: Require provisioning Ethernet
-      ansible.builtin.assert:
-        that:
-          - provisioning_nic.stat.exists
-        fail_msg: "Provisioning interface {{ provisioning.interface }} not found"
+            expected = sys.argv[1].strip().lower()
+            matches = [
+                interface.name
+                for interface in Path("/sys/class/net").iterdir()
+                if (interface / "address").is_file()
+                and (interface / "address").read_text().strip().lower() == expected
+            ]
+            if len(matches) != 1:
+                raise SystemExit(
+                    f"Expected exactly one provisioning NIC with MAC {expected}; "
+                    f"found {matches}"
+                )
+            print(matches[0])
+          - "{{ provisioning.mac }}"
+      register: arch_provisioning_interface_lookup
+      changed_when: false
+
+    - name: Record provisioning Ethernet interface
+      ansible.builtin.set_fact:
+        arch_provisioning_interface: "{{ arch_provisioning_interface_lookup.stdout | trim }}"
 
     - name: Report preflight result
       ansible.builtin.debug:
@@ -50,4 +69,4 @@
           - "Detected OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
           - "Architecture: {{ ansible_architecture }}"
           - "Kernel: {{ ansible_kernel }}"
-          - "Provisioning interface: {{ provisioning.interface }}"
+          - "Provisioning interface: {{ arch_provisioning_interface }}"

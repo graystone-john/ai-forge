@@ -25,6 +25,13 @@
           {{ arch_kernel_version }}; running
           {{ ansible_distribution }} {{ ansible_kernel }}
 
+    - name: Prepare AI Stores Accelerator for Pacman
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/../roles/ai-forge/tasks/ai-stores-accelerator-pacman.yaml"
+      vars:
+        accelerator_pacman_remote: "{{ arch_pacman_base_url }}"
+        accelerator_pacman_relative: "vault/linux/arch/pacman/2026.09.29"
+
     - name: Install AI Stores Pacman configuration
       ansible.builtin.copy:
         dest: /etc/pacman-ai-forge.conf
@@ -38,9 +45,11 @@
           LocalFileSigLevel = Optional
 
           [core]
+          {{ ('Server = ' ~ accelerator_pacman_url ~ '/core/os/$arch') if accelerator_pacman_url | length > 0 else '' }}
           Server = {{ arch_pacman_base_url }}/core/os/$arch
 
           [extra]
+          {{ ('Server = ' ~ accelerator_pacman_url ~ '/extra/os/$arch') if accelerator_pacman_url | length > 0 else '' }}
           Server = {{ arch_pacman_base_url }}/extra/os/$arch
 
     - name: Synchronize AI Stores Pacman databases

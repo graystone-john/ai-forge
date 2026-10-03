@@ -693,6 +693,13 @@
   ansible.builtin.set_fact:
     hermes_playwright_pacman_config: "{{ hermes_root }}/playwright-pacman.conf"
 
+- name: Prepare AI Stores Accelerator for Pacman
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/../roles/ai-forge/tasks/ai-stores-accelerator-pacman.yaml"
+  vars:
+    accelerator_pacman_remote: "{{ hermes_agent.playwright.arch.pacman_repository }}"
+    accelerator_pacman_relative: "vault/graystone/playwright/dependencies/arch-playwright-1.62.1/20261002T021910.336597Z/pacman"
+
 - name: Configure immutable Arch Playwright repository
   ansible.builtin.copy:
     dest: "{{ hermes_playwright_pacman_config }}"
@@ -706,9 +713,11 @@
       LocalFileSigLevel = Optional
 
       [core]
+      {{ ('Server = ' ~ accelerator_pacman_url ~ '/core/os/$arch') if accelerator_pacman_url | length > 0 else '' }}
       Server = {{ hermes_agent.playwright.arch.pacman_repository }}/core/os/$arch
 
       [extra]
+      {{ ('Server = ' ~ accelerator_pacman_url ~ '/extra/os/$arch') if accelerator_pacman_url | length > 0 else '' }}
       Server = {{ hermes_agent.playwright.arch.pacman_repository }}/extra/os/$arch
 
 - name: Synchronize Arch Playwright repository

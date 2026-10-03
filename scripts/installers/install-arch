@@ -58,6 +58,100 @@ def write(path, text, mode=None):
         path.chmod(mode)
 
 
+
+def prepare_arch_accelerator(machine_name, os_device, base_url):
+    """Return a local repository URL and cleanup callback."""
+    import atexit
+
+    def noop():
+        pass
+
+    expected_url = (
+        "http://10.10.10.1:81/ai-stores/"
+        "vault/linux/arch/pacman/2026.09.29"
+    )
+    if machine_name != "daedalus-01" or base_url != expected_url:
+        return "", noop
+
+    uuid = "87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c"
+    partition = Path("/dev/disk/by-uuid") / uuid
+
+    if not partition.exists():
+        print("AI Stores Accelerator: absent; using Athena.", flush=True)
+        return "", noop
+
+    # Verify physical ancestry before the installer wipes any disk.
+    device = partition.resolve()
+    ancestry = json.loads(output(
+        "lsblk", "--json", "--inverse", "--paths",
+        "--output", "NAME,TYPE,SERIAL", str(device),
+    ))
+
+    disks = []
+    def visit(node):
+        if node.get("type") == "disk":
+            disks.append(node)
+        for child in node.get("children", []):
+            visit(child)
+
+    for node in ancestry["blockdevices"]:
+        visit(node)
+
+    if (
+        len(disks) != 1
+        or disks[0].get("serial", "").strip() != "21052C800059"
+        or Path(disks[0]["name"]).resolve() == Path(os_device).resolve()
+    ):
+        raise RuntimeError(
+            "Accelerator disk identity or separation check failed"
+        )
+
+    mountpoint = Path("/run/ai-stores-accelerator")
+    mountpoint.mkdir(parents=True, exist_ok=True)
+
+    existing = subprocess.run(
+        ["findmnt", "--noheadings", "--mountpoint", str(mountpoint)],
+        capture_output=True, text=True,
+    )
+    if existing.returncode != 1:
+        raise RuntimeError(
+            "Accelerator mountpoint is already mounted or cannot be inspected"
+        )
+
+    mounted = subprocess.run(
+        ["mount", "-t", "ext4", "-o", "ro,noload",
+         str(device), str(mountpoint)],
+        text=True,
+    )
+    if mounted.returncode:
+        print("AI Stores Accelerator: mount failed; using Athena.", flush=True)
+        return "", noop
+
+    def cleanup():
+        if mountpoint.is_mount():
+            run("umount", mountpoint)
+
+    atexit.register(cleanup)
+
+    repository = mountpoint / "vault/linux/arch/pacman/2026.09.29"
+    required = [
+        repository / ".seed-complete",
+        repository / "core/os/x86_64/core.db",
+        repository / "extra/os/x86_64/extra.db",
+    ]
+    if not all(p.is_file() for p in required):
+        cleanup()
+        print("AI Stores Accelerator: seed incomplete; using Athena.", flush=True)
+        return "", noop
+
+    print(
+        f"AI Stores Accelerator: Arch packages from {repository}; "
+        "Athena fallback enabled.",
+        flush=True,
+    )
+    return repository.as_uri(), cleanup
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Graystone AI Forge Arch Linux base installer"
@@ -153,6 +247,10 @@ def main():
     efi = Path(f"{device}p1")
     root = Path(f"{device}p2")
 
+    accelerator_url, accelerator_cleanup = prepare_arch_accelerator(
+        machine["name"], device, pacman_config["base_url"].rstrip("/")
+    )
+
     # Wipe and partition.
     run("sgdisk", "--zap-all", device)
     run(
@@ -239,6 +337,16 @@ def main():
         encoding="utf-8",
     )
 
+    if accelerator_url:
+        config_text = pacman_config_path.read_text(encoding="utf-8")
+        for repo in ("core", "extra"):
+            remote = f"Server = {pacman_base_url}/{repo}/os/$arch"
+            local = f"Server = {accelerator_url}/{repo}/os/$arch"
+            if config_text.count(remote) != 1:
+                raise RuntimeError("Unexpected Pacman repository configuration")
+            config_text = config_text.replace(remote, local + "\n" + remote, 1)
+        pacman_config_path.write_text(config_text, encoding="utf-8")
+
     print("Arch bootstrap packages:")
     for package in packages:
         print(f"  {package}")
@@ -248,13 +356,16 @@ def main():
         f"{pacman_base_url}"
     )
 
-    run(
-        "pacstrap",
-        "-C",
-        str(pacman_config_path),
-        "/mnt",
-        *packages,
-    )
+    try:
+        run(
+            "pacstrap",
+            "-C",
+            str(pacman_config_path),
+            "/mnt",
+            *packages,
+        )
+    finally:
+        accelerator_cleanup()
 
     # fstab.
     fstab = output("genfstab", "-U", "/mnt")
