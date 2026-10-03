@@ -110,13 +110,8 @@
   changed_when: false
   when: llama_prebuilt.library_paths | default([]) | length > 0
 
-- name: Copy captured runtime from Athena
-  ansible.builtin.copy:
-    src: "{{ llama_prebuilt.archive }}"
-    dest: "{{ llama_prebuilt.root }}/deploy/llama-runtime.tar.gz"
-    owner: root
-    group: root
-    mode: "0644"
+- name: Acquire captured runtime from accelerator or Athena
+  ansible.builtin.include_tasks: llama-acquire-archive.yaml
 
 - name: Check transferred runtime archive
   ansible.builtin.stat:

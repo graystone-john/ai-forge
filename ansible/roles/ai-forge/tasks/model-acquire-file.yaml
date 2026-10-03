@@ -31,13 +31,58 @@
   when: accelerator_artifact_ready | bool
   block:
     - name: Copy accelerator artifact to model cache
-      ansible.builtin.copy:
-        src: "{{ model_accelerator_directory }}/{{ item.filename }}"
-        dest: "{{ item.destination }}"
-        remote_src: true
-        owner: "{{ inference.operational_user }}"
-        group: "{{ inference.operational_user }}"
-        mode: "0644"
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - |
+            import grp
+            import hashlib
+            import os
+            from pathlib import Path
+            import pwd
+            import shutil
+            import sys
+            import tempfile
+
+            source, target, user, group, expected = sys.argv[1:]
+            destination = Path(target)
+            uid = pwd.getpwnam(user).pw_uid
+            gid = grp.getgrnam(group).gr_gid
+
+            if destination.is_file() and not destination.is_symlink():
+                with destination.open("rb") as stream:
+                    current = hashlib.file_digest(stream, "sha256").hexdigest()
+                if current == expected:
+                    before = destination.stat()
+                    changed = (
+                        before.st_uid != uid or before.st_gid != gid
+                        or before.st_mode & 0o7777 != 0o644
+                    )
+                    os.chown(destination, uid, gid)
+                    os.chmod(destination, 0o644)
+                    print("CHANGED" if changed else "UNCHANGED")
+                    sys.exit(0)
+
+            descriptor, temporary = tempfile.mkstemp(
+                prefix=".ai-forge-model-", dir=destination.parent
+            )
+            os.close(descriptor)
+            try:
+                shutil.copyfile(source, temporary)
+                os.chown(temporary, uid, gid)
+                os.chmod(temporary, 0o644)
+                os.replace(temporary, destination)
+            finally:
+                Path(temporary).unlink(missing_ok=True)
+            print("CHANGED")
+          - "{{ model_accelerator_directory }}/{{ item.filename }}"
+          - "{{ item.destination }}"
+          - "{{ inference.operational_user }}"
+          - "{{ inference.operational_user }}"
+          - "{{ item.sha256 }}"
+      register: accelerator_local_copy
+      changed_when: accelerator_local_copy.stdout | trim == 'CHANGED'
 
     - name: Verify model cache SHA-256
       ansible.builtin.stat:

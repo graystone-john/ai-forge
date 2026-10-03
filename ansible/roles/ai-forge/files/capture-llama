@@ -281,6 +281,54 @@ for path in (build / "CMakeFiles").glob("*/CMake*Compiler.cmake"):
 
 shutil.copy2(source / "LICENSE", metadata / "llama.cpp-LICENSE")
 
+
+# Record package owners of external libraries required by every staged ELF.
+if package_manager == "pacman":
+    runtime_packages = {}
+    external_libraries = {}
+    for path in sorted(staged_runtime.rglob("*")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        with path.open("rb") as stream:
+            if stream.read(4) != b"\x7fELF":
+                continue
+        result = subprocess.run(
+            ["ldd", str(path)], text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            env=dict(os.environ, LC_ALL="C", LD_LIBRARY_PATH=""),
+        )
+        if result.returncode:
+            if any(message in result.stdout for message in (
+                "statically linked", "not a dynamic executable"
+            )):
+                continue
+            raise SystemExit(result.stdout)
+        if "not found" in result.stdout:
+            raise SystemExit("Unresolved staged library: " + result.stdout)
+        for line in result.stdout.splitlines():
+            target = line.split("=>", 1)[-1].strip()
+            if not target.startswith("/"):
+                continue
+            library = Path(target.split()[0]).resolve(strict=True)
+            if library.is_relative_to(staged_runtime.resolve()):
+                continue
+            owners = run(["pacman", "-Qqo", str(library)]).splitlines()
+            if len(owners) != 1:
+                raise SystemExit("Ambiguous library owner: " + str(library))
+            package, package_version = run(
+                ["pacman", "-Q", owners[0]]
+            ).split(maxsplit=1)
+            runtime_packages[package] = package_version
+            external_libraries[str(library)] = package
+    if not runtime_packages or "nvidia-utils" not in runtime_packages:
+        raise SystemExit("Missing Arch runtime or NVIDIA driver evidence")
+    (metadata / "arch-runtime-packages.json").write_text(
+        json.dumps({
+            "packages": runtime_packages,
+            "libraries": external_libraries,
+        }, indent=2) + "\n"
+    )
+
 provenance = {
     "schema_version": 1,
     "capture_id": capture.name,

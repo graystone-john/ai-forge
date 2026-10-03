@@ -1,0 +1,107 @@
+id: ai-forge-configure
+namespace: graystone
+
+inputs:
+  - id: machine
+    type: SELECT
+    required: true
+    values:
+      - daedalus-01
+      - daedalus-02
+  - id: os
+    type: SELECT
+    required: true
+    values:
+      - ubuntu-24.04
+      - arch-2026.09.01
+
+tasks:
+  - id: preflight
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+      FORGE_OS: "{{ inputs.os }}"
+    commands:
+      - |
+        set -eu
+        case "$FORGE_MACHINE:$FORGE_OS" in
+          daedalus-01:ubuntu-24.04|daedalus-01:arch-2026.09.01|daedalus-02:ubuntu-24.04|daedalus-02:arch-2026.09.01) ;;
+          *) echo "Unsupported machine/OS combination" >&2; exit 2 ;;
+        esac
+        cd /home/nispoe/graystone/ai-forge/ansible
+        ansible-playbook "playbooks/preflight-${FORGE_OS}.yaml" --limit "$FORGE_MACHINE"
+
+  - id: bootstrap_management
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge/ansible
+        ansible-playbook playbooks/bootstrap-management.yaml --limit "$FORGE_MACHINE"
+
+  - id: base_system_kernel
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+      FORGE_OS: "{{ inputs.os }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge/ansible
+        ansible-playbook "playbooks/base-system-kernel-${FORGE_OS}.yaml" --limit "$FORGE_MACHINE"
+
+  - id: base_system_network
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+      FORGE_OS: "{{ inputs.os }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge/ansible
+        ansible-playbook "playbooks/base-system-network-${FORGE_OS}.yaml" --limit "$FORGE_MACHINE"
+
+  - id: base_system_nvidia
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+      FORGE_OS: "{{ inputs.os }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge/ansible
+        ansible-playbook "playbooks/base-system-nvidia-${FORGE_OS}.yaml" --limit "$FORGE_MACHINE"
+
+  - id: os_specific_utilities
+    type: io.kestra.plugin.core.flow.Switch
+    value: "{{ inputs.os }}"
+    cases:
+      arch-2026.09.01:
+        - id: arch_utilities
+          type: io.kestra.plugin.scripts.shell.Commands
+          taskRunner:
+            type: io.kestra.plugin.core.runner.Process
+          env:
+            FORGE_MACHINE: "{{ inputs.machine }}"
+          commands:
+            - |
+              set -eu
+              cd /home/nispoe/graystone/ai-forge/ansible
+              ansible-playbook playbooks/base-system-utilities-arch-2026.09.01.yaml --limit "$FORGE_MACHINE"
+
+      ubuntu-24.04:
+        - id: ubuntu_utilities_not_required
+          type: io.kestra.plugin.core.log.Log
+          message: "No separate utilities playbook in the Ubuntu sequence."

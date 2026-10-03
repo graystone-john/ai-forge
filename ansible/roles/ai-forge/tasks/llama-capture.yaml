@@ -33,7 +33,7 @@
 - name: Define Athena artifact destination
   ansible.builtin.set_fact:
     llama_capture_store: >-
-      {{ ai_stores_root }}/vault/graystone/llama.cpp/{{
+      {{ ai_stores_root | default(playbook_dir ~ '/../../../ai-stores') }}/vault/graystone/llama.cpp/{{
       llama_source_build.version }}/{{
       llama_source_build.configuration_id }}/{{
       llama_capture.capture_id }}

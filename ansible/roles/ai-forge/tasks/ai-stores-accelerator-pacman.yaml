@@ -4,7 +4,7 @@
     accelerator_pacman_url: ""
 
 - name: Prepare local Pacman repository
-  when: inventory_hostname == 'daedalus-01'
+  when: inventory_hostname in ['daedalus-01', 'daedalus-02']
   block:
     - name: Mount existing accelerator
       ansible.builtin.include_tasks:

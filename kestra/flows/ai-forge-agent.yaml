@@ -1,0 +1,94 @@
+id: ai-forge-agent
+namespace: graystone
+
+description: |
+  Install coding tools, workspace, and Hermes Agent.
+  Standalone AI Node and Hermes smoke tests run separately.
+
+inputs:
+  - id: machine
+    type: SELECT
+    displayName: Machine
+    required: true
+    values:
+      - daedalus-01
+      - daedalus-02
+
+  - id: os
+    type: SELECT
+    displayName: Operating system
+    required: true
+    values:
+      - ubuntu-24.04
+      - arch-2026.09.01
+
+tasks:
+  - id: coding_tools
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+      FORGE_OS: "{{ inputs.os }}"
+      ANSIBLE_SSH_PIPELINING: "true"
+    commands:
+      - |
+        set -eu
+        case "$FORGE_MACHINE:$FORGE_OS" in
+          daedalus-01:ubuntu-24.04|daedalus-01:arch-2026.09.01|daedalus-02:ubuntu-24.04|daedalus-02:arch-2026.09.01) ;;
+          *) echo "Unsupported machine/OS combination" >&2; exit 2 ;;
+        esac
+        cd /home/nispoe/graystone/ai-forge/ansible
+        ansible-playbook playbooks/coding-tools.yaml --limit "$FORGE_MACHINE"
+
+  - id: agent_workspace
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+      ANSIBLE_SSH_PIPELINING: "true"
+    commands:
+      - |
+        set -eu
+        case "$FORGE_MACHINE" in
+          daedalus-01|daedalus-02) ;;
+          *) echo "Unsupported machine" >&2; exit 2 ;;
+        esac
+        cd /home/nispoe/graystone/ai-forge/ansible
+        ansible-playbook playbooks/agent-workspace.yaml --limit "$FORGE_MACHINE"
+
+  - id: hermes_agent
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+      FORGE_OS: "{{ inputs.os }}"
+      ANSIBLE_SSH_PIPELINING: "true"
+    commands:
+      - |
+        set -eu
+        case "$FORGE_MACHINE:$FORGE_OS" in
+          daedalus-01:ubuntu-24.04|daedalus-01:arch-2026.09.01|daedalus-02:ubuntu-24.04|daedalus-02:arch-2026.09.01) ;;
+          *) echo "Unsupported machine/OS combination" >&2; exit 2 ;;
+        esac
+        cd /home/nispoe/graystone/ai-forge/ansible
+        ansible-playbook "playbooks/hermes-agent-${FORGE_OS}.yaml" --limit "$FORGE_MACHINE"
+
+  - id: hermes_large_context
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+      ANSIBLE_SSH_PIPELINING: "true"
+    commands:
+      - |
+        set -eu
+        case "$FORGE_MACHINE" in
+          daedalus-01|daedalus-02) ;;
+          *) echo "Unsupported machine" >&2; exit 2 ;;
+        esac
+        cd /home/nispoe/graystone/ai-forge/ansible
+        ansible-playbook playbooks/hermes-agent-large-context.yaml --limit "$FORGE_MACHINE"

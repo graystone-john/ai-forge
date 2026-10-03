@@ -1,6 +1,6 @@
 ---
-- name: Prepare daedalus-01 accelerator mount
-  when: inventory_hostname == 'daedalus-01'
+- name: Prepare AI Stores Accelerator mount
+  when: inventory_hostname in ['daedalus-01', 'daedalus-02']
   block:
     - name: Find existing accelerator filesystem
       ansible.builtin.command:

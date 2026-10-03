@@ -1,0 +1,113 @@
+id: ai-forge-end-to-end-provision
+namespace: graystone
+
+description: |
+  Select the machine and OS, register, provision, and configure its AI stack.
+  WARNING: Execution wipes and reinstalls the selected machine's configured OS disk.
+
+inputs:
+  - id: machine
+    type: SELECT
+    displayName: Machine
+    required: true
+    values:
+      - daedalus-01
+      - daedalus-02
+
+  - id: os
+    type: SELECT
+    displayName: Operating system
+    required: true
+    values:
+      - ubuntu-24.04
+      - arch-2026.09.01
+
+tasks:
+  - id: ensure_machine_ready
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+    commands:
+      - |
+        set -eu
+        case "$FORGE_MACHINE" in
+          daedalus-01|daedalus-02) ;;
+          *) echo "Unsupported machine" >&2; exit 2 ;;
+        esac
+
+        cd /home/nispoe/graystone/ai-forge
+
+        ./forge status "$FORGE_MACHINE"
+
+        if ./forge wait "$FORGE_MACHINE" \
+          --for ssh --timeout 10 --interval 2; then
+          echo "$FORGE_MACHINE is already SSH-ready."
+        else
+          echo "$FORGE_MACHINE is not SSH-ready; sending Wake-on-LAN."
+          ./forge wake "$FORGE_MACHINE"
+        fi
+
+        ./forge wait "$FORGE_MACHINE" \
+          --for ssh --timeout 30 --interval 2
+
+        ./forge status "$FORGE_MACHINE"
+
+  - id: select_os_and_register
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: graystone
+    flowId: ai-forge-select-os
+    inputs:
+      machine: "{{ inputs.machine }}"
+      os: "{{ inputs.os }}"
+    wait: true
+    transmitFailed: true
+
+  - id: provision_os
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: graystone
+    flowId: ai-forge-provision
+    inputs:
+      machine: "{{ inputs.machine }}"
+    wait: true
+    transmitFailed: true
+
+  - id: configure_base_system
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: graystone
+    flowId: ai-forge-configure
+    inputs:
+      machine: "{{ inputs.machine }}"
+      os: "{{ inputs.os }}"
+    wait: true
+    transmitFailed: true
+
+  - id: reboot_and_validate
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: graystone
+    flowId: ai-forge-reboot-validate
+    inputs:
+      machine: "{{ inputs.machine }}"
+      os: "{{ inputs.os }}"
+    wait: true
+    transmitFailed: true
+
+  - id: deploy_inference
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: graystone
+    flowId: ai-forge-inference
+    inputs:
+      machine: "{{ inputs.machine }}"
+    wait: true
+    transmitFailed: true
+
+  - id: configure_and_validate_agent
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: graystone
+    flowId: ai-forge-agent
+    inputs:
+      machine: "{{ inputs.machine }}"
+      os: "{{ inputs.os }}"
+    wait: true
+    transmitFailed: true

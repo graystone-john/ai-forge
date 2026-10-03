@@ -1,0 +1,84 @@
+---
+- name: Seed selected llama runtime on AI Stores Accelerator
+  hosts: daedalus
+  become: true
+  gather_facts: false
+
+  vars_files:
+    - "{{ llama_deploy_profile }}"
+
+  tasks:
+    - name: Mount existing accelerator
+      ansible.builtin.include_tasks:
+        file: ../roles/ai-forge/tasks/ai-stores-accelerator-mount.yaml
+
+    - name: Read seed destination identity
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --noheadings
+          - --raw
+          - --output
+          - UUID
+          - --mountpoint
+          - /mnt/ai-stores-accelerator
+      register: runtime_seed_mount
+      changed_when: false
+
+    - name: Require expected accelerator and vault archive
+      ansible.builtin.assert:
+        that:
+          - runtime_seed_mount.stdout | trim == '87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c'
+          - "'/vault/' in llama_prebuilt.archive"
+          - "'..' not in llama_prebuilt.archive.split('/vault/', 1)[1].split('/')"
+
+    - name: Verify source runtime on Athena
+      ansible.builtin.stat:
+        path: "{{ llama_prebuilt.archive }}"
+        checksum_algorithm: sha256
+      register: runtime_seed_source
+      delegate_to: localhost
+      become: false
+
+    - name: Require pinned source runtime
+      ansible.builtin.assert:
+        that:
+          - runtime_seed_source.stat.isreg | default(false)
+          - runtime_seed_source.stat.checksum | default('') == llama_prebuilt.archive_sha256
+
+    - name: Define native vault destination
+      ansible.builtin.set_fact:
+        runtime_seed_destination: >-
+          /mnt/ai-stores-accelerator/vault/{{
+          llama_prebuilt.archive.split('/vault/', 1)[1] }}
+
+    - name: Create runtime seed directory
+      ansible.builtin.file:
+        path: "{{ runtime_seed_destination | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Seed selected runtime archive
+      ansible.builtin.copy:
+        src: "{{ llama_prebuilt.archive }}"
+        dest: "{{ runtime_seed_destination }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Verify seeded runtime SHA256
+      ansible.builtin.stat:
+        path: "{{ runtime_seed_destination }}"
+        checksum_algorithm: sha256
+      register: runtime_seed_result
+
+    - name: Require matching seeded runtime
+      ansible.builtin.assert:
+        that:
+          - runtime_seed_result.stat.checksum == llama_prebuilt.archive_sha256
+
+    - name: Report runtime seed
+      ansible.builtin.debug:
+        msg: "Verified runtime on SSD: {{ runtime_seed_destination }}"

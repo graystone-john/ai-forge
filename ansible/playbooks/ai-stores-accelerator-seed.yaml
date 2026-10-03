@@ -1,6 +1,6 @@
 ---
 - name: Seed AI Stores Accelerator
-  hosts: daedalus-01
+  hosts: daedalus
   become: true
   gather_facts: false
 
@@ -15,6 +15,16 @@
       model.hf_repo }}/revisions/{{ model.revision }}
 
   tasks:
+    - name: Require pinned Muse repository for DFlash seed
+      ansible.builtin.assert:
+        that:
+          - model.hf_repo == 'meta-models/Muse-Glimmer-30B-GGUF'
+          - model.revision == '70bf1b61ac09f91b24d39038091b41c582bc5d7a'
+
+    - name: Mount existing accelerator
+      ansible.builtin.include_tasks:
+        file: ../roles/ai-forge/tasks/ai-stores-accelerator-mount.yaml
+
     - name: Read mounted accelerator identity
       ansible.builtin.command:
         argv:
@@ -68,11 +78,13 @@
           sha256: "{{ model.model_checksum }}"
         - filename: "{{ model.projector_file }}"
           sha256: "{{ model.projector_checksum }}"
+        - filename: "dflash-Muse-Glimmer-30B-Q4_K_M.gguf"
+          sha256: "b2e808bf656086fe86bd0d0bd990f01d33e377537a07c02d45371517c8b264ef"
       loop_control:
         label: "{{ item.filename }}"
 
     - name: Report accelerator seed completion
       ansible.builtin.debug:
         msg:
-          - "Model and projector seeded and SHA-256 verified."
+          - "Model, projector, and DFlash seeded and SHA-256 verified."
           - "Location: {{ accelerator_model_dir }}"

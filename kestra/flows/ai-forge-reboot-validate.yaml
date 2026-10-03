@@ -1,0 +1,60 @@
+id: ai-forge-reboot-validate
+namespace: graystone
+
+inputs:
+  - id: machine
+    type: SELECT
+    required: true
+    values:
+      - daedalus-01
+      - daedalus-02
+  - id: os
+    type: SELECT
+    required: true
+    values:
+      - ubuntu-24.04
+      - arch-2026.09.01
+
+tasks:
+  - id: reboot_and_wait_for_shutdown
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+      FORGE_OS: "{{ inputs.os }}"
+    commands:
+      - |
+        set -eu
+        case "$FORGE_MACHINE:$FORGE_OS" in
+          daedalus-01:ubuntu-24.04|daedalus-01:arch-2026.09.01|daedalus-02:ubuntu-24.04|daedalus-02:arch-2026.09.01) ;;
+          *) echo "Unsupported machine/OS combination" >&2; exit 2 ;;
+        esac
+        cd /home/nispoe/graystone/ai-forge
+        ./forge boot "$FORGE_MACHINE" reboot
+        ./forge wait "$FORGE_MACHINE" --for offline --timeout 180 --interval 2
+
+  - id: wait_for_ssh
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge
+        ./forge wait "$FORGE_MACHINE" --for ssh --timeout 300 --interval 5
+
+  - id: post_reboot_validation
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+      FORGE_OS: "{{ inputs.os }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge/ansible
+        ansible-playbook "playbooks/post-reboot-validation-${FORGE_OS}.yaml" --limit "$FORGE_MACHINE"

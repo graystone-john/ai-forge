@@ -1,0 +1,51 @@
+id: ai-forge-inference
+namespace: graystone
+
+inputs:
+  - id: machine
+    type: SELECT
+    required: true
+    values:
+      - daedalus-01
+      - daedalus-02
+
+tasks:
+  - id: agent_identity
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+    commands:
+      - |
+        set -eu
+        case "$FORGE_MACHINE" in
+          daedalus-01|daedalus-02) ;;
+          *) exit 2 ;;
+        esac
+        cd /home/nispoe/graystone/ai-forge/ansible
+        ansible-playbook playbooks/agent-identity.yaml --limit "$FORGE_MACHINE"
+
+  - id: agent_credentials
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge/ansible
+        ansible-playbook playbooks/agent-credentials.yaml --limit "$FORGE_MACHINE"
+
+  - id: inference
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge/ansible
+        ansible-playbook playbooks/inference.yaml --limit "$FORGE_MACHINE"

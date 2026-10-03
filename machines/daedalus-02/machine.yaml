@@ -22,12 +22,14 @@ network:
   wifi_interface: wlp4s0
   provisioning_pci_id: 1d6a:14c0
   provisioning_loader: aqc1xx
+  wifi_mac: f4:46:37:80:88:f6
+  wifi_pci_id: 8086:2725
 ansible:
   user: ai-forge
 inference_profile: muse-glimmer-30b
-runtime_profile: llama-b10612-daedalus-02-sm120
+runtime_profile: llama-b10612-daedalus-02-sm120-arch-2026-09-01
 profiles:
 - coding-agent
 os:
-  distribution: ubuntu
-  version: '24.04'
+  distribution: arch
+  version: 2026.09.01

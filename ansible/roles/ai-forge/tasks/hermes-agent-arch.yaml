@@ -732,15 +732,20 @@
 
 - name: Query requested Arch Playwright packages
   ansible.builtin.command:
-    argv:
-      - pacman
-      - --config
-      - "{{ hermes_playwright_pacman_config }}"
-      - -Si
-      - "{{ item }}"
-  loop: "{{ hermes_agent.playwright.arch.packages }}"
+    argv: >-
+      {{
+        [
+          'pacman',
+          '--config', hermes_playwright_pacman_config,
+          '-Si'
+        ] + hermes_agent.playwright.arch.packages
+      }}
   register: hermes_arch_playwright_repository_packages
   changed_when: false
+
+- name: Report Arch Playwright package query elapsed
+  ansible.builtin.debug:
+    msg: "Package query elapsed: {{ hermes_arch_playwright_repository_packages.delta }}"
 
 - name: Report Arch Playwright dependency installation start
   ansible.builtin.debug:

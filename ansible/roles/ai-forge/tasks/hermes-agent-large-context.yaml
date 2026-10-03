@@ -42,16 +42,24 @@
     group: daedalus
     mode: "0755"
 
-- name: Download Muse Glimmer DFlash model from AI Stores
-  ansible.builtin.get_url:
-    url: >-
-      {{ ai_stores.base_url }}/vault/huggingface/meta-models/Muse-Glimmer-30B-GGUF/revisions/{{
-      hermes_dflash_revision }}/{{ hermes_dflash_file }}
-    dest: "{{ hermes_dflash_dir }}/{{ hermes_dflash_file }}"
-    checksum: "sha256:{{ hermes_dflash_sha256 }}"
-    owner: daedalus
-    group: daedalus
-    mode: "0644"
+- name: Require matching DFlash repository and revision
+  ansible.builtin.assert:
+    that:
+      - model.hf_repo == 'meta-models/Muse-Glimmer-30B-GGUF'
+      - model.revision == hermes_dflash_revision
+    fail_msg: "DFlash acquisition must use its pinned repository and revision."
+
+- name: Prepare DFlash accelerator source
+  ansible.builtin.include_tasks: model-accelerator-prepare.yaml
+
+- name: Acquire verified DFlash model
+  ansible.builtin.include_tasks: model-acquire-file.yaml
+  loop:
+    - filename: "{{ hermes_dflash_file }}"
+      destination: "{{ hermes_dflash_dir }}/{{ hermes_dflash_file }}"
+      sha256: "{{ hermes_dflash_sha256 }}"
+  loop_control:
+    label: "{{ item.filename }}"
 
 - name: Define large-context inference configuration
   ansible.builtin.set_fact:

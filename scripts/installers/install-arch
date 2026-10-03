@@ -70,7 +70,7 @@ def prepare_arch_accelerator(machine_name, os_device, base_url):
         "http://10.10.10.1:81/ai-stores/"
         "vault/linux/arch/pacman/2026.09.29"
     )
-    if machine_name != "daedalus-01" or base_url != expected_url:
+    if machine_name not in ("daedalus-01", "daedalus-02") or base_url != expected_url:
         return "", noop
 
     uuid = "87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c"

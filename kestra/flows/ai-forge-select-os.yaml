@@ -1,0 +1,110 @@
+id: ai-forge-select-os
+namespace: graystone
+
+description: |
+  Select the machine OS and runtime, validate, and register with Ansible.
+  Does not provision or reboot.
+
+inputs:
+  - id: machine
+    type: SELECT
+    required: true
+    values:
+      - daedalus-01
+      - daedalus-02
+  - id: os
+    type: SELECT
+    required: true
+    values:
+      - ubuntu-24.04
+      - arch-2026.09.01
+
+tasks:
+  - id: update_machine_configuration
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+      FORGE_OS: "{{ inputs.os }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge
+
+        python3 - <<'PY'
+        import os
+        from pathlib import Path
+        import yaml
+
+        machine = os.environ["FORGE_MACHINE"]
+        selection = os.environ["FORGE_OS"]
+
+        runtimes = {
+            ("daedalus-01", "ubuntu-24.04"):
+                "llama-b10612-daedalus-01-sm86",
+            ("daedalus-01", "arch-2026.09.01"):
+                "llama-b10612-daedalus-01-sm86-arch-2026-09-01",
+            ("daedalus-02", "ubuntu-24.04"):
+                "llama-b10612-daedalus-02-sm120",
+            ("daedalus-02", "arch-2026.09.01"):
+                "llama-b10612-daedalus-02-sm120-arch-2026-09-01",
+        }
+
+        runtime = runtimes.get((machine, selection))
+        if runtime is None:
+            raise SystemExit("Unsupported machine/OS combination")
+
+        profile = Path("ansible/profiles/runtimes") / (runtime + ".yaml")
+        if not profile.is_file():
+            raise SystemExit(f"Missing runtime profile: {profile}")
+
+        path = Path("machines") / machine / "machine.yaml"
+        config = yaml.safe_load(path.read_text())
+        if not isinstance(config, dict) or config.get("name") != machine:
+            raise SystemExit("Machine inventory identity mismatch")
+
+        network = config.get("network", {})
+        for key in (
+            "provisioning_mac", "provisioning_interface",
+            "wifi_mac", "wifi_interface", "wifi_pci_id",
+        ):
+            if not network.get(key):
+                raise SystemExit(f"Missing machine network identity: {key}")
+
+        distribution, version = selection.split("-", 1)
+        config["os"] = {
+            "distribution": distribution,
+            "version": version,
+        }
+        config["runtime_profile"] = runtime
+
+        path.write_text(yaml.safe_dump(config, sort_keys=False))
+        print("Machine:", machine)
+        print("OS:", selection)
+        print("Runtime:", runtime)
+        PY
+
+  - id: validate_machine
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge
+        ./forge machine validate "$FORGE_MACHINE"
+
+  - id: register_ansible_machine
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge
+        ./scripts/register-ansible-machine.py "$FORGE_MACHINE"

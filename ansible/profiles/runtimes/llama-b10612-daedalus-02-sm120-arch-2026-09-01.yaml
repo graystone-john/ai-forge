@@ -1,0 +1,49 @@
+llama_source_build:
+  version: b10612
+  commit: 7584430716ee229751771ed0d6bbcb780d105eeb
+  configuration_id: arch-2026.09.01-amd64-cuda13.4-sm120-daedalus-02-native
+  platform:
+    distribution: Archlinux
+    architecture: x86_64
+  baseline: 2026.09.01
+  root: /opt/ai-forge/llama.cpp/b10612-cuda13.4-sm120-daedalus-02
+  cuda_architectures: '120'
+  cpu_native: 'ON'
+  c_compiler: /usr/bin/gcc
+  cxx_compiler: /usr/bin/g++
+  cuda_compiler: /opt/cuda/bin/nvcc
+  source_store: '{{ playbook_dir }}/../../../ai-stores/vault/github/ggml-org/llama.cpp/7584430716ee229751771ed0d6bbcb780d105eeb/source.git'
+  ui_archive: '{{ playbook_dir }}/../../../ai-stores/vault/huggingface/buckets/ggml-org/llama-ui/b10612/dist.tar.gz'
+  ui_sha256: 3f7a482b86620b5dfbaf3432927bd357e679440237d3d83c27c07423cecf1f6d
+  pacman_repository: http://10.10.10.1:81/ai-stores/vault/graystone/llama.cpp/dependencies/arch-cuda13.4-sm86/20260930T052629.926543Z/pacman
+  build_packages:
+  - cuda
+  - cmake
+  - gcc
+  - make
+  - git
+  - gzip
+  jobs: 4
+llama_prebuilt:
+  version: b10612
+  commit: 7584430716ee229751771ed0d6bbcb780d105eeb
+  configuration_id: arch-2026.09.01-amd64-cuda13.4-sm120-daedalus-02-native
+  root: /opt/ai-forge/llama.cpp/b10612-cuda13.4-sm120-daedalus-02
+  archive: '{{ playbook_dir }}/../../../ai-stores/vault/graystone/llama.cpp/b10612/arch-2026.09.01-amd64-cuda13.4-sm120-daedalus-02-native/20261003T020920Z-jh4cp5i5/llama-runtime.tar.gz'
+  archive_sha256: 851db6085485414d14c47845dd3244a148c90bce521178459fcce5041acfefa1
+  distribution: Archlinux
+  architecture: x86_64
+  cpu_model: 12th Gen Intel(R) Core(TM) i9-12900K
+  gpu_name: NVIDIA GeForce RTX 5090
+  compute_capability: '12.0'
+  driver_version: 615.71.09
+  runtime_packages:
+    nvidia-utils: 615.71.09-1
+    libstdc++: 16.2.1+r23+gd564253eb6c8-1
+    glibc: 2.44+r50+g1848099f063e-1
+    libgcc: 16.2.1+r23+gd564253eb6c8-1
+    openssl: 3.6.4-1
+    libgomp: 16.2.1+r23+gd564253eb6c8-1
+    zlib: 1:1.3.2-3
+    brotli: 1.2.0-1
+    zstd: 1.5.7-3

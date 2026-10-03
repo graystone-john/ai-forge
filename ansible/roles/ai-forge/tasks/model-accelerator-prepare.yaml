@@ -1,0 +1,30 @@
+---
+- name: Prepare AI Stores Accelerator
+  ansible.builtin.include_tasks: ai-stores-accelerator-mount.yaml
+
+- name: Check mounted AI Stores Accelerator
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - --noheadings
+      - --raw
+      - --output
+      - UUID
+      - --mountpoint
+      - /mnt/ai-stores-accelerator
+  register: model_accelerator_mount
+  changed_when: false
+  failed_when: false
+
+- name: Define accelerator model source
+  ansible.builtin.set_fact:
+    model_accelerator_available: >-
+      {{
+        inventory_hostname in ['daedalus-01', 'daedalus-02']
+        and model_accelerator_mount.rc == 0
+        and model_accelerator_mount.stdout | trim ==
+            '87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c'
+      }}
+    model_accelerator_directory: >-
+      /mnt/ai-stores-accelerator/vault/huggingface/{{
+      model.hf_repo }}/revisions/{{ model.revision }}

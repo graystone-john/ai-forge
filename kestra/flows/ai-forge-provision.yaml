@@ -1,0 +1,70 @@
+id: ai-forge-provision
+namespace: graystone
+
+description: |
+  Wipe and reinstall the selected machine using its current machine.yaml.
+  Run ai-forge-select-os first.
+
+inputs:
+  - id: machine
+    type: SELECT
+    required: true
+    values:
+      - daedalus-01
+      - daedalus-02
+
+tasks:
+  - id: check_readiness
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+    commands:
+      - |
+        set -eu
+        case "$FORGE_MACHINE" in
+          daedalus-01|daedalus-02) ;;
+          *) exit 2 ;;
+        esac
+        cd /home/nispoe/graystone/ai-forge
+        ./forge machine validate "$FORGE_MACHINE"
+        ./forge status "$FORGE_MACHINE"
+        ./forge boot "$FORGE_MACHINE" status
+
+  - id: reinstall_os
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge
+        ./forge provision "$FORGE_MACHINE"
+
+  - id: wait_for_shutdown
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge
+        ./forge wait "$FORGE_MACHINE" --for offline --timeout 180 --interval 2
+
+  - id: wait_for_ssh
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge
+        ./forge wait "$FORGE_MACHINE" --for ssh --timeout 1200 --interval 5
+        ./forge status "$FORGE_MACHINE"
