@@ -24,6 +24,10 @@
         status_code: 200
       changed_when: false
 
+    - name: Prepare AI Stores Accelerator for APT
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/../roles/ai-forge/tasks/ai-stores-accelerator-apt.yaml"
+
     - name: Install AI Stores NVIDIA APT source
       ansible.builtin.copy:
         dest: "{{ nvidia_ai_stores_source }}"
@@ -31,6 +35,7 @@
         group: root
         mode: "0644"
         content: |
+          {{ ai_stores_accelerator_apt_line }}
           deb [trusted=yes] {{ daedalus_nvidia.apt_repository }} noble main
 
     - name: Update APT metadata from AI Stores only

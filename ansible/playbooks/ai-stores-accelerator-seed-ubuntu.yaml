@@ -1,0 +1,71 @@
+---
+- name: Seed Ubuntu ISO on AI Stores Accelerator
+  hosts: daedalus-01
+  become: true
+  gather_facts: false
+
+  vars_files:
+    - ../../config/forge.yaml
+
+  vars:
+    accelerator_mount: /mnt/ai-stores-accelerator
+    accelerator_uuid: 87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c
+    ubuntu_iso_directory: >-
+      {{ accelerator_mount }}/vault/linux/ubuntu/releases/24.04.4/amd64
+    ubuntu_iso_filename: ubuntu-24.04.4-live-server-amd64.iso
+    ubuntu_iso_sha256: e907d92eeec9df64163a7e454cbc8d7755e8ddc7ed42f99dbc80c40f1a138433
+
+  tasks:
+    - name: Prepare accelerator mount
+      ansible.builtin.include_tasks:
+        file: ../roles/ai-forge/tasks/ai-stores-accelerator-mount.yaml
+
+    - name: Read mounted accelerator UUID
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --noheadings
+          - --raw
+          - --output
+          - UUID
+          - --mountpoint
+          - "{{ accelerator_mount }}"
+      register: accelerator_identity
+      changed_when: false
+
+    - name: Require expected accelerator
+      ansible.builtin.assert:
+        that:
+          - accelerator_identity.stdout | trim == accelerator_uuid
+
+    - name: Create ISO directory
+      ansible.builtin.file:
+        path: "{{ ubuntu_iso_directory }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Create download staging directory
+      ansible.builtin.file:
+        path: "{{ accelerator_mount }}/.downloads"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Download and verify Ubuntu ISO
+      ansible.builtin.get_url:
+        url: "{{ images.ubuntu['24.04'].iso_url }}"
+        dest: "{{ ubuntu_iso_directory }}/{{ ubuntu_iso_filename }}"
+        tmp_dest: "{{ accelerator_mount }}/.downloads"
+        checksum: "sha256:{{ ubuntu_iso_sha256 }}"
+        owner: root
+        group: root
+        mode: "0644"
+        timeout: 120
+        use_proxy: false
+
+    - name: Report verified ISO
+      ansible.builtin.debug:
+        msg: "Verified accelerator ISO: {{ ubuntu_iso_directory }}/{{ ubuntu_iso_filename }}"

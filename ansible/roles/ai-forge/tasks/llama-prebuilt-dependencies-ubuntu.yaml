@@ -69,6 +69,10 @@
     - "{{ llama_prebuilt.root }}/deploy/apt-lists"
     - "{{ llama_prebuilt.root }}/deploy/apt-lists/partial"
 
+- name: Prepare AI Stores Accelerator for APT
+  ansible.builtin.include_tasks:
+    file: "{{ playbook_dir }}/../roles/ai-forge/tasks/ai-stores-accelerator-apt.yaml"
+
 - name: Configure runtime dependency source
   ansible.builtin.copy:
     dest: "{{ llama_prebuilt.root }}/deploy/runtime-deps.list"
@@ -76,6 +80,7 @@
     group: root
     mode: "0644"
     content: |
+      {{ ai_stores_accelerator_apt_line }}
       deb [arch=amd64 trusted=yes] {{ llama_prebuilt.apt_repository }} noble main
 
 - name: Define isolated runtime APT command

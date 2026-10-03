@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ISO="$ROOT/../ai-stores/vault/linux/ubuntu/releases/24.04.4/amd64/ubuntu-24.04.4-live-server-amd64.iso"
+EXPECTED=e907d92eeec9df64163a7e454cbc8d7755e8ddc7ed42f99dbc80c40f1a138433
+OUTPUT="$ROOT/runtime/http/ubuntu-accelerator/initrd"
+
+for tool in unmkinitramfs unsquashfs cpio gzip sha256sum; do
+    command -v "$tool" >/dev/null
+done
+
+printf "%s  %s\n" "$EXPECTED" "$ISO" | sha256sum -c -
+
+work=$(mktemp -d)
+mounted=0
+cleanup() {
+    if [[ "$mounted" == 1 ]]; then
+        sudo umount "$work/iso" || return
+    fi
+    rm -rf "$work"
+}
+trap cleanup EXIT
+
+mkdir "$work/iso"
+sudo mount -o loop,ro "$ISO" "$work/iso"
+mounted=1
+
+unmkinitramfs "$work/iso/casper/initrd" "$work/unpacked"
+
+order="$work/unpacked/main/scripts/casper-premount/ORDER"
+test -f "$order"
+test -f "$work/unpacked/main/scripts/casper"
+
+# Acquire the AMD64 checksum executable from the pinned installer ISO.
+unsquashfs -no-progress -no-xattrs \
+    -d "$work/iso-tools" \
+    "$work/iso/casper/ubuntu-server-minimal.squashfs" \
+    usr/bin/sha256sum
+
+test -f "$work/iso-tools/usr/bin/sha256sum"
+mkdir -p "$work/overlay/usr/bin"
+install -m 0755 "$work/iso-tools/usr/bin/sha256sum" \
+    "$work/overlay/usr/bin/sha256sum"
+
+mkdir -p "$work/overlay/scripts/casper-premount"
+cp "$ROOT/scripts/initramfs/ai-stores-accelerator" \
+   "$work/overlay/scripts/casper-premount/25ai_stores_accelerator"
+cp "$order" "$work/overlay/scripts/casper-premount/ORDER"
+
+cat >> "$work/overlay/scripts/casper-premount/ORDER" <<'ORDER'
+
+/scripts/casper-premount/25ai_stores_accelerator "$@"
+[ -e /conf/param.conf ] && . /conf/param.conf
+ORDER
+
+sh -n "$work/overlay/scripts/casper-premount/ORDER"
+
+(
+    cd "$work/overlay"
+    find . -print0 |
+        cpio --null --create --format=newc --owner=0:0 |
+        gzip -n > "$work/overlay.cpio.gz"
+)
+
+mkdir -p "$(dirname "$OUTPUT")"
+cat "$work/iso/casper/initrd" "$work/overlay.cpio.gz" > "$OUTPUT.tmp"
+chmod 0644 "$OUTPUT.tmp"
+mv "$OUTPUT.tmp" "$OUTPUT"
+
+printf "Built: %s\n" "$OUTPUT"
+sha256sum "$OUTPUT"

@@ -1,0 +1,79 @@
+---
+- name: Seed Ubuntu APT repository on AI Stores Accelerator
+  hosts: daedalus-01
+  become: true
+  gather_facts: false
+
+  vars:
+    accelerator_mount: /mnt/ai-stores-accelerator
+    accelerator_uuid: 87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c
+    accelerator_apt: "{{ accelerator_mount }}/vault/linux/ubuntu/apt"
+    athena_apt: "{{ playbook_dir }}/../../../ai-stores/vault/linux/ubuntu/apt"
+
+  tasks:
+    - name: Mount accelerator
+      ansible.builtin.include_tasks:
+        file: ../roles/ai-forge/tasks/ai-stores-accelerator-mount.yaml
+
+    - name: Read accelerator filesystem identity
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --noheadings
+          - --raw
+          - --output
+          - UUID
+          - --mountpoint
+          - "{{ accelerator_mount }}"
+      register: accelerator_identity
+      changed_when: false
+
+    - name: Require expected accelerator
+      ansible.builtin.assert:
+        that:
+          - accelerator_identity.stdout | trim == accelerator_uuid
+
+    - name: Check source repository metadata
+      ansible.builtin.stat:
+        path: "{{ athena_apt }}/dists/noble/Release"
+      delegate_to: localhost
+      become: false
+      register: apt_source_release
+
+    - name: Require source repository
+      ansible.builtin.assert:
+        that:
+          - apt_source_release.stat.isreg | default(false)
+
+    - name: Create accelerator APT directory
+      ansible.builtin.file:
+        path: "{{ accelerator_apt }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Clear completion marker before seeding
+      ansible.builtin.file:
+        path: "{{ accelerator_apt }}/.seed-complete"
+        state: absent
+
+    - name: Copy package pool before repository metadata
+      ansible.builtin.copy:
+        src: "{{ athena_apt }}/{{ item }}/"
+        dest: "{{ accelerator_apt }}/{{ item }}/"
+        owner: root
+        group: root
+        mode: "0644"
+        directory_mode: "0755"
+      loop:
+        - pool
+        - dists
+
+    - name: Record completed repository seed
+      ansible.builtin.copy:
+        dest: "{{ accelerator_apt }}/.seed-complete"
+        content: "Ubuntu noble APT repository copied from Athena.\n"
+        owner: root
+        group: root
+        mode: "0644"

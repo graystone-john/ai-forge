@@ -22,7 +22,11 @@ set semi:hex 3b
 kernel ${boot_base}/vmlinuz initrd=initrd ip=dhcp cloud-config-url=/dev/null url=${iso_url} autoinstall ds=nocloud-net${semi:string}s=http://${server}/pxe/{{ machine_name }}/ nomodeset
 
 echo Loading Ubuntu initrd...
+{% if machine_name == 'daedalus-01' %}
+initrd --name initrd http://${server}/pxe/ubuntu-accelerator/initrd
+{% else %}
 initrd --name initrd ${boot_base}/initrd
+{% endif %}
 
 echo Starting Ubuntu Autoinstall...
 boot

@@ -1,0 +1,65 @@
+#!/bin/sh
+
+case "${1:-}" in
+    prereqs) exit 0 ;;
+esac
+
+log() {
+    echo "AI Stores Accelerator: $*"
+    if [ -w /dev/kmsg ]; then
+        printf "<6>AI Stores Accelerator: %s\n" "$*" > /dev/kmsg || true
+    fi
+}
+
+log "Premount hook started."
+
+uuid=87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c
+relative=/vault/linux/ubuntu/releases/24.04.4/amd64/ubuntu-24.04.4-live-server-amd64.iso
+expected=e907d92eeec9df64163a7e454cbc8d7755e8ddc7ed42f99dbc80c40f1a138433
+device="/dev/disk/by-uuid/$uuid"
+
+for tool in mount umount sha256sum; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        log "$tool unavailable; using Athena."
+        exit 0
+    fi
+done
+
+udevadm settle --timeout=5 2>/dev/null || true
+
+if [ ! -b "$device" ]; then
+    log "SSD absent; using Athena."
+    exit 0
+fi
+
+mkdir -p /isodevice
+if ! mount -t ext4 -o ro,noload "$device" /isodevice; then
+    log "SSD could not be mounted; using Athena."
+    exit 0
+fi
+
+iso="/isodevice$relative"
+if [ ! -f "$iso" ]; then
+    umount /isodevice || true
+    log "ISO absent; using Athena."
+    exit 0
+fi
+
+log "Verifying Ubuntu ISO..."
+actual=$(sha256sum "$iso") || actual=
+actual=${actual%% *}
+
+if [ "$actual" != "$expected" ]; then
+    umount /isodevice || true
+    log "ISO checksum failed; using Athena."
+    exit 0
+fi
+
+cat >> /conf/param.conf <<EOF
+LIVEMEDIA='$iso'
+LIVEMEDIA_OFFSET=0
+NETBOOT=''
+EOF
+
+log "Verified ISO selected from SSD."
+exit 0

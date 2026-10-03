@@ -1,0 +1,56 @@
+---
+- name: Default to Athena APT source
+  ansible.builtin.set_fact:
+    ai_stores_accelerator_apt_line: ""
+
+- name: Prepare accelerator APT source
+  when: inventory_hostname == 'daedalus-01'
+  block:
+    - name: Mount existing accelerator
+      ansible.builtin.include_tasks:
+        file: "{{ playbook_dir }}/../roles/ai-forge/tasks/ai-stores-accelerator-mount.yaml"
+
+    - name: Read accelerator mount UUID
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --noheadings
+          - --raw
+          - --output
+          - UUID
+          - --mountpoint
+          - /mnt/ai-stores-accelerator
+      register: accelerator_apt_mount
+      changed_when: false
+      failed_when: false
+
+    - name: Check accelerator APT seed files
+      ansible.builtin.stat:
+        path: "/mnt/ai-stores-accelerator/vault/linux/ubuntu/apt/{{ item }}"
+        get_checksum: false
+      loop:
+        - .seed-complete
+        - dists/noble/Release
+      register: accelerator_apt_seed
+
+    - name: Prefer seeded accelerator repository
+      ansible.builtin.set_fact:
+        ai_stores_accelerator_apt_line: >-
+          deb [arch=amd64 trusted=yes] file:/mnt/ai-stores-accelerator/vault/linux/ubuntu/apt noble main
+      when:
+        - accelerator_apt_mount.rc == 0
+        - accelerator_apt_mount.stdout | trim == '87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c'
+        - accelerator_apt_seed.results[0].stat.isreg | default(false)
+        - accelerator_apt_seed.results[1].stat.isreg | default(false)
+
+  rescue:
+    - name: Use Athena when accelerator preparation fails
+      ansible.builtin.set_fact:
+        ai_stores_accelerator_apt_line: ""
+
+- name: Report APT acquisition sources
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'Accelerator first; Athena also available'
+         if ai_stores_accelerator_apt_line | length > 0
+         else 'Athena only' }}
