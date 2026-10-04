@@ -1,4 +1,4 @@
-"""Argus MCP bridge to the existing Athena Hermes profile."""
+"""Argus MCP bridge to Athena, Nemosyne, and Daedalus Hermes."""
 
 import os
 import re
@@ -42,15 +42,19 @@ def _ask_hermes(profile: str, workspace: str, task: str, session_id: str = "", r
     if remote:
         import shlex
 
-        # Run timeout under the same OS user as the remote Hermes process.
         remote_command = [
             "/usr/bin/sudo", "-n", "-H", "-u", "daedalus",
-            "/usr/bin/timeout", "--signal=TERM", "--kill-after=10s", "140s",
-            "/usr/local/bin/hermes",
-            *command[5:],
+            "/usr/local/bin/hermes", "chat",
+            "--oneshot", "--quiet",
+            "--in", workspace,
+            "--query-file", "-",
         ]
+        if session_id:
+            remote_command.extend([
+                "--resume", session_id, "--no-restore-cwd",
+            ])
+
         command = [
-            "/usr/bin/timeout", "--signal=TERM", "--kill-after=10s", "170s",
             "/usr/bin/ssh", "-T",
             "-i", "/home/nispoe/graystone/ai-forge/secrets/ssh/id_ed25519_ai_forge",
             "-o", "BatchMode=yes",
@@ -60,7 +64,7 @@ def _ask_hermes(profile: str, workspace: str, task: str, session_id: str = "", r
             "-o", "ServerAliveInterval=15",
             "-o", "ServerAliveCountMax=3",
             "ai-forge@10.10.10.21",
-            shlex.join(remote_command),
+            "cd / && " + shlex.join(remote_command),
         ]
 
     # Hermes loads its own profile credentials; it needs no Turnstone secrets.
@@ -137,20 +141,20 @@ def ask_nemosyne(task: str, session_id: str = "") -> dict:
 
 @mcp.tool()
 def ask_daedalus(task: str, session_id: str = "") -> dict:
-    """Delegate a task to the Daedalus Hermes agent on Daedalus-02.
+    """Delegate a task to Hermes on daedalus-02 over SSH.
 
-    Executes on 10.10.10.21 as OS user daedalus, using Hermes profile
-    daedalus and workspace /home/daedalus/graystone/ai-forge.
-    Omit session_id initially; reuse Daedalus's returned ID for follow-ups.
-    Never use another specialist's session ID.
+    Runs as OS user daedalus using the default Hermes configuration
+    and the provisioned ai-forge workspace.
+    Omit session_id for a new conversation; reuse the exact returned
+    session ID for follow-ups. Never use another specialist's session ID.
+    This bridge adds no wall-clock budget or tool-iteration limit.
+    Hermes and the MCP client may have their own configured limits.
     Returns actual host, profile, stdout, stderr, session_id and exit_status.
-    Four tool iterations and a 120-second run budget per call.
-    Including SSH and shutdown time, calls may take up to 180 seconds.
-    Use read-only tasks during initial testing.
     Process success alone does not establish task completion.
     """
     return _ask_hermes(
-        "daedalus", "/home/daedalus/graystone/ai-forge",
+        "default",
+        "/home/daedalus/graystone/ai-forge",
         task, session_id, remote=True
     )
 
