@@ -11,6 +11,11 @@ parser.add_argument("--verify", choices=("full", "fast"), default="full")
 
 import uuid
 parser.add_argument("--run-id", default=uuid.uuid4().hex)
+parser.add_argument(
+    "--live-source",
+    choices=("ssd", "http"),
+    default="ssd",
+)
 args = parser.parse_args()
 if len(args.run_id) != 32 or any(c not in "0123456789abcdef" for c in args.run_id):
     parser.error("--run-id must contain 32 lowercase hexadecimal characters")
@@ -40,7 +45,7 @@ expected="${1:?Missing restore-script checksum}"
 actual="$(sha256sum "$0")"
 actual="${actual%% *}"
 if [ "$actual" != "$expected" ]; then
-    echo "Capture script checksum mismatch. Capture refused."
+    echo "Restore script checksum mismatch. Restore refused."
     exec /bin/bash
 fi
 
@@ -73,9 +78,18 @@ digest = hashlib.sha256(script.read_bytes()).hexdigest()
 base = f"http://{server}/pxe/imaging/clonezilla-{version}"
 script_url = f"http://{server}/pxe/{machine}/clonezilla-restore.sh"
 
+if args.live_source == "ssd":
+    live_args = (
+        "live-media=/dev/disk/by-uuid/87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c "
+        f"live-media-path=boot/clonezilla-{version}/live "
+        "toram=filesystem.squashfs"
+    )
+else:
+    live_args = f"fetch={base}/filesystem.squashfs"
+
 ipxe = f"""#!ipxe
 echo AI Forge: Clonezilla offline restore of daedalus-02
-kernel {base}/vmlinuz initrd=initrd.img boot=live username=user union=overlay config components noswap edd=on nomodeset nodmraid locales=en_US.UTF-8 keyboard-layouts=NONE net.ifnames=0 nosplash noprompt ip=eth0:10.10.10.21:255.255.255.0:10.10.10.1:10.10.10.1 fetch={base}/filesystem.squashfs ocs_prerun="wget -O /tmp/ai-forge-restore {script_url}" ocs_live_run="sudo bash /tmp/ai-forge-restore {digest}" ocs_live_batch=yes
+kernel {base}/vmlinuz initrd=initrd.img boot=live username=user union=overlay config components noswap edd=on nomodeset nodmraid locales=en_US.UTF-8 keyboard-layouts=NONE net.ifnames=0 nosplash noprompt ip=eth0:10.10.10.21:255.255.255.0:10.10.10.1:10.10.10.1 {live_args} ocs_prerun="wget --timeout=3 --tries=20 --waitretry=1 --retry-connrefused -O /tmp/ai-forge-restore {script_url}" ocs_live_run="sudo bash /tmp/ai-forge-restore {digest}" ocs_live_batch=yes
 initrd --name initrd.img {base}/initrd.img
 boot
 """
@@ -84,3 +98,5 @@ print("Prepared:", destination / "restore.ipxe")
 print("Prepared:", script)
 print("Restore script SHA256:", digest)
 print("Image verification mode:", args.verify)
+
+print("Live filesystem source:", args.live_source)
