@@ -1,0 +1,55 @@
+id: ai-forge-start-shutdown
+namespace: graystone
+
+description: |
+  Launch shutdown asynchronously so the initiating Hermes session
+  can finish its response and exit before poweroff.
+
+inputs:
+  - id: machine
+    type: SELECT
+    required: true
+    defaults: daedalus-02
+    values:
+      - daedalus-01
+      - daedalus-02
+
+tasks:
+  - id: start_shutdown
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: graystone
+    flowId: ai-forge-shutdown
+    inputs:
+      machine: "{{ inputs.machine }}"
+    wait: false
+    transmitFailed: false
+
+outputs:
+  - id: execution_id
+    type: STRING
+    value: "{{ outputs.start_shutdown.executionId }}"
+
+  - id: machine
+    type: STRING
+    value: "{{ inputs.machine }}"
+
+  - id: status
+    type: STRING
+    value: "Shutdown launched; poweroff has not been verified."
+
+triggers:
+  - id: mcp
+    type: io.kestra.plugin.core.trigger.McpToolTrigger
+    mcpServer: default
+    toolName: ai_forge_shutdown
+    title: Shut down Graystone machine
+    toolDescription: |
+      Request shutdown of daedalus-01 or daedalus-02.
+      Interrupts running workloads. Use only when the user requests
+      shutdown and local work has been saved.
+      On daedalus-02, waits for the active Hermes response to finish
+      and its TUI and gateway to exit before requesting poweroff.
+      Returns an execution ID, not confirmation of poweroff.
+      Launch once. Report the execution ID, then finish your response
+      and stop making tool calls. Do not wait for shutdown completion
+      or retry automatically.

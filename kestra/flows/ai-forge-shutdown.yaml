@@ -1,0 +1,28 @@
+id: ai-forge-shutdown
+namespace: graystone
+
+inputs:
+  - id: machine
+    type: SELECT
+    displayName: Machine
+    values:
+      - daedalus-01
+      - daedalus-02
+    defaults: daedalus-02
+
+tasks:
+  - id: shutdown_machine
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge
+        ./forge boot "$FORGE_MACHINE" poweroff
+
+  - id: shutdown_requested
+    type: io.kestra.plugin.core.log.Log
+    message: "Poweroff request sent for {{ inputs.machine }}"
