@@ -1,0 +1,53 @@
+---
+- name: Check repository destination
+  ansible.builtin.stat:
+    path: "/home/daedalus/graystone/{{ demo_repo.name }}"
+  register: demo_repo_directory
+
+- name: Clone missing repository
+  become_user: daedalus
+  ansible.builtin.command:
+    argv:
+      - git
+      - clone
+      - "{{ demo_repo.repository }}"
+      - "/home/daedalus/graystone/{{ demo_repo.name }}"
+  environment:
+    GIT_SSH_COMMAND: ssh -F /home/daedalus/.ssh/demo-github.conf
+    GIT_LFS_SKIP_SMUDGE: "1"
+  when: not demo_repo_directory.stat.exists
+
+- name: Read repository origin
+  become_user: daedalus
+  ansible.builtin.command:
+    argv:
+      - git
+      - -C
+      - "/home/daedalus/graystone/{{ demo_repo.name }}"
+      - remote
+      - get-url
+      - origin
+  register: demo_repo_origin
+  changed_when: false
+
+- name: Require expected repository
+  ansible.builtin.assert:
+    that:
+      - demo_repo_origin.stdout == demo_repo.repository
+    fail_msg: "Existing {{ demo_repo.name }} origin does not match; checkout preserved."
+
+- name: Read checked-out revision
+  become_user: daedalus
+  ansible.builtin.command:
+    argv:
+      - git
+      - -C
+      - "/home/daedalus/graystone/{{ demo_repo.name }}"
+      - rev-parse
+      - HEAD
+  register: demo_repo_revision
+  changed_when: false
+
+- name: Report repository revision
+  ansible.builtin.debug:
+    msg: "{{ demo_repo.name }}: {{ demo_repo_revision.stdout }}"

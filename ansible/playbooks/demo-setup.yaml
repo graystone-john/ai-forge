@@ -1,0 +1,17 @@
+---
+- name: Set up Daedalus demo
+  hosts: daedalus
+  gather_facts: true
+  become: true
+
+  pre_tasks:
+    - name: Require supported demo target
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'daedalus-02'
+        fail_msg: "Demo setup currently supports daedalus-02 only."
+
+  roles:
+    - role: ai-forge
+      vars:
+        ai_forge_stage: demo-setup

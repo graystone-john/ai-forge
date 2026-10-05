@@ -1,0 +1,19 @@
+[Unit]
+Description=Daedalus sandbox demo
+After=network.target
+
+[Service]
+Type=simple
+User=daedalus
+Group=daedalus
+WorkingDirectory=/home/daedalus/graystone/daedalus-sandbox
+ExecStart=/usr/bin/python3 -m http.server 8095 --bind 0.0.0.0 --directory /home/daedalus/graystone/daedalus-sandbox
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

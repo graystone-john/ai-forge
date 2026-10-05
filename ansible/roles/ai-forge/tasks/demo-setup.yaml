@@ -1,0 +1,149 @@
+---
+- name: Require provisioned agent configuration
+  ansible.builtin.assert:
+    that:
+      - agent_identity is defined
+      - agent_workspace is defined
+      - agent_identity.user == 'daedalus'
+
+- name: Ensure agent workspace root exists
+  ansible.builtin.file:
+    path: /home/daedalus/graystone
+    state: directory
+    owner: daedalus
+    group: daedalus
+    mode: "0755"
+
+- name: Ensure agent SSH directory exists
+  ansible.builtin.file:
+    path: /home/daedalus/.ssh
+    state: directory
+    owner: daedalus
+    group: daedalus
+    mode: "0700"
+
+- name: Install dedicated demo GitHub private key
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../secrets/agents/daedalus/id_ed25519_graystone_daedalus"
+    dest: /home/daedalus/.ssh/id_ed25519_graystone_daedalus
+    owner: daedalus
+    group: daedalus
+    mode: "0600"
+  no_log: true
+
+- name: Install dedicated demo GitHub public key
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../secrets/agents/daedalus/id_ed25519_graystone_daedalus.pub"
+    dest: /home/daedalus/.ssh/id_ed25519_graystone_daedalus.pub
+    owner: daedalus
+    group: daedalus
+    mode: "0644"
+
+- name: Install dedicated demo SSH configuration
+  ansible.builtin.copy:
+    dest: /home/daedalus/.ssh/demo-github.conf
+    owner: daedalus
+    group: daedalus
+    mode: "0600"
+    content: |
+      Host github.com
+          HostName github.com
+          User git
+          IdentityFile /home/daedalus/.ssh/id_ed25519_graystone_daedalus
+          IdentitiesOnly yes
+          IdentityAgent none
+          BatchMode yes
+          StrictHostKeyChecking yes
+
+- name: Verify dedicated GitHub identity
+  become_user: daedalus
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -F
+      - /home/daedalus/.ssh/demo-github.conf
+      - -T
+      - git@github.com
+  register: demo_github_auth
+  changed_when: false
+  failed_when: >-
+    'Hi graystone-daedalus!' not in
+    (demo_github_auth.stdout ~ demo_github_auth.stderr)
+
+- name: Ensure demo repositories are available
+  ansible.builtin.include_tasks: demo-repository.yaml
+  loop:
+    - name: ai-forge
+      repository: "{{ agent_workspace.repository }}"
+    - name: ai-stores
+      repository: https://github.com/graystone-john/ai-stores.git
+    - name: daedalus-sandbox
+      repository: git@github.com:graystone-john/daedalus-sandbox.git
+  loop_control:
+    loop_var: demo_repo
+    label: "{{ demo_repo.name }}"
+
+- name: Configure sandbox Git identity and SSH credential
+  become_user: daedalus
+  community.general.git_config:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    scope: local
+    repo: /home/daedalus/graystone/daedalus-sandbox
+  loop:
+    - name: user.name
+      value: Daedalus
+    - name: user.email
+      value: daedalus@graystone.systems
+    - name: core.sshCommand
+      value: ssh -F /home/daedalus/.ssh/demo-github.conf
+
+- name: Require demo page
+  ansible.builtin.stat:
+    path: /home/daedalus/graystone/daedalus-sandbox/index.html
+  register: demo_page
+
+- name: Verify demo page exists
+  ansible.builtin.assert:
+    that:
+      - demo_page.stat.exists
+      - demo_page.stat.isreg
+
+- name: Install demo web service
+  ansible.builtin.template:
+    src: daedalus-demo.service.j2
+    dest: /etc/systemd/system/daedalus-demo.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: demo_service
+
+- name: Start demo web service
+  ansible.builtin.systemd:
+    name: daedalus-demo.service
+    daemon_reload: true
+    enabled: true
+    state: "{{ 'restarted' if demo_service.changed else 'started' }}"
+
+- name: Verify demo HTTP endpoint
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8095/
+    return_content: true
+    status_code: 200
+  register: demo_http
+  retries: 10
+  delay: 2
+  until: demo_http.status == 200
+
+- name: Verify expected page is served
+  ansible.builtin.assert:
+    that:
+      - "'DEMO Project' in demo_http.content"
+
+- name: Report demo setup
+  ansible.builtin.debug:
+    msg:
+      - "Demo service: daedalus-demo.service"
+      - "Workspace: /home/daedalus/graystone/daedalus-sandbox"
+      - "GitHub identity: graystone-daedalus"
+      - "HTTP port: 8095"
