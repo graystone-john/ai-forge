@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "$(id -un)" != "daedalus" ]; then
+    cd /
+    exec sudo -n -H -u daedalus /usr/local/bin/daedalus-demo "$@"
+fi
+
+cd /home/daedalus/graystone/daedalus-sandbox
+
+prompt=$(cat <<'PROMPT'
+You are Daedalus, working on the Daedalus sandbox demo.
+
+Bootstrap this session using read-only operations:
+1. Read AGENTS.md and TASK.md. If either is missing, report it.
+2. Check hostname, pwd, Git branch, working-tree status, and HEAD.
+3. Read the existing journal in index.html.
+4. Report the recorded continuation task and distinguish recorded
+   history from facts verified in this session.
+5. Identify whether the configured Kestra MCP tools are available.
+   Do not call any provisioning, shutdown, or wake tool.
+
+The sibling ai-forge and ai-stores repositories are available for
+inspection. Do not acquire the ai-stores vault.
+
+Do not modify files, switch branches, commit, push, open a PR, or
+initiate provisioning during bootstrap. Do not assume a rebuild
+succeeded merely because this session started.
+
+Give a short status and proposed next step, then wait for the user.
+PROMPT
+)
+
+exec /usr/local/bin/hermes chat --tui \
+    --in /home/daedalus/graystone/daedalus-sandbox \
+    --query "$prompt" "$@"

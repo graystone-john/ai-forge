@@ -1,0 +1,30 @@
+---
+- name: Configure Hermes Kestra connection
+  no_log: true
+  block:
+    - name: Read provisioned Hermes configuration
+      ansible.builtin.slurp:
+        src: /home/daedalus/.hermes/config.yaml
+      register: demo_hermes_config
+
+    - name: Merge Kestra into Hermes configuration
+      ansible.builtin.copy:
+        dest: /home/daedalus/.hermes/config.yaml
+        owner: daedalus
+        group: daedalus
+        mode: "0600"
+        content: >-
+          {{
+            (demo_hermes_config.content | b64decode | from_yaml)
+            | combine({
+                'mcp_servers': {
+                  'kestra': (
+                    lookup('ansible.builtin.file',
+                      playbook_dir ~ '/../../secrets/agents/daedalus/kestra-mcp.json')
+                    | from_json
+                  )
+                }
+              }, recursive=True)
+            | to_nice_yaml
+          }}
+      diff: false

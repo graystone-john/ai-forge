@@ -188,3 +188,15 @@
       - "Workspace: /home/daedalus/graystone/daedalus-sandbox"
       - "GitHub identity: graystone-daedalus"
       - "HTTP port: 8095"
+
+- name: Configure demo Kestra MCP access
+  ansible.builtin.include_tasks: demo-kestra-mcp.yaml
+
+- name: Install Daedalus demo launcher
+  ansible.builtin.template:
+    src: daedalus-demo.sh.j2
+    dest: /usr/local/bin/daedalus-demo
+    owner: root
+    group: root
+    mode: "0755"
+    validate: /bin/bash -n %s
