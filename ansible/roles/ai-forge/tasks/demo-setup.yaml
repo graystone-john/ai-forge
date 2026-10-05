@@ -6,6 +6,11 @@
       - agent_workspace is defined
       - agent_identity.user == 'daedalus'
 
+- name: Refresh Ubuntu package index for demo dependencies
+  ansible.builtin.apt:
+    update_cache: true
+  when: ansible_facts['os_family'] == 'Debian'
+
 - name: Install GitHub CLI
   ansible.builtin.package:
     name: gh
