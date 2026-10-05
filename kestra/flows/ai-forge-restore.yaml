@@ -1,0 +1,47 @@
+id: ai-forge-restore
+namespace: graystone
+
+description: |
+  Restore Daedalus-02 from its pinned accelerator SSD image.
+  DESTRUCTIVE: overwrites the OS partitions with the captured AI stack.
+  Verifies the matching restore record and inference health.
+  Does not retry automatically.
+
+inputs:
+  - id: verification
+    type: SELECT
+    required: true
+    defaults: full
+    values:
+      - full
+      - fast
+
+  - id: setup_demo
+    type: BOOL
+    defaults: false
+
+tasks:
+  - id: restore_and_validate
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      RESTORE_VERIFICATION: "{{ inputs.verification }}"
+    commands:
+      - |
+        set -eu
+        cd /home/nispoe/graystone/ai-forge
+        scripts/imaging/run-restore "$RESTORE_VERIFICATION"
+
+  - id: optional_demo_setup
+    type: io.kestra.plugin.core.flow.If
+    condition: "{{ inputs.setup_demo }}"
+    then:
+      - id: setup_demo
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: graystone
+        flowId: ai-forge-demo-setup
+        inputs:
+          machine: daedalus-02
+        wait: true
+        transmitFailed: true

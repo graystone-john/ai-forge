@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+fail() { echo "RESTORE FAILED: $*" >&2; exit 1; }
+
+test "$(id -u)" -eq 0 || fail "Run as root in the offline environment."
+
+for tool in lsblk findmnt blkid blockdev mount mountpoint umount \
+            sfdisk partclone.ext4 partclone.fat sha256sum python3 sync; do
+    command -v "$tool" >/dev/null || fail "Missing tool: $tool"
+done
+
+started="$(date -u +%FT%TZ)"
+started_seconds="$(date +%s)"
+image_name=ubuntu-24.04-ai-stack-20261005T054838Z
+
+resolve_disk() {
+    lsblk --json --nodeps --output PATH,SERIAL,TYPE |
+        python3 -c '
+import json, sys
+matches = [
+    d["path"] for d in json.load(sys.stdin)["blockdevices"]
+    if d["type"] == "disk" and
+       (d.get("serial") or "").strip() == sys.argv[1]
+]
+if len(matches) != 1:
+    raise SystemExit("Expected exactly one disk: " + sys.argv[1])
+print(matches[0])
+' "$1"
+}
+
+os_disk="$(resolve_disk 23122X800326)"
+accelerator_disk="$(resolve_disk 21052C800059)"
+test "$os_disk" != "$accelerator_disk" || fail "Disks overlap."
+test "$(blockdev --getsize64 "$os_disk")" = 4000787030016 ||
+    fail "Unexpected OS disk size."
+test "$(blockdev --getss "$os_disk")" = 512 ||
+    fail "Unexpected logical sector size."
+
+efi="${os_disk}p1"
+root_partition="${os_disk}p2"
+accelerator="${accelerator_disk}p1"
+
+for device in "$efi" "$root_partition" "$accelerator"; do
+    test -b "$device" || fail "Missing partition: $device"
+done
+
+test "$(blkid -s UUID -o value "$accelerator")" = \
+    87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c ||
+    fail "Unexpected accelerator UUID."
+
+check_offline() {
+    lsblk --json --output PATH,MOUNTPOINTS,TYPE "$os_disk" |
+        python3 -c '
+import json, sys
+def check(node):
+    if any(node.get("mountpoints") or []):
+        raise SystemExit("OS device is mounted/active: " + node["path"])
+    if node["type"] not in ("disk", "part"):
+        raise SystemExit("Active device holder: " + node["path"])
+    for child in node.get("children", []):
+        check(child)
+for node in json.load(sys.stdin)["blockdevices"]:
+    check(node)
+'
+}
+check_offline
+
+if findmnt --source "$accelerator" >/dev/null; then
+    fail "Accelerator already mounted."
+fi
+
+store_mount=/run/ai-forge-restore-store
+mkdir -p "$store_mount"
+mountpoint -q "$store_mount" && fail "Mountpoint occupied."
+mount -t ext4 -o ro,noload "$accelerator" "$store_mount"
+trap 'umount "$store_mount" || true' EXIT
+
+image="$store_mount/images/daedalus-02/$image_name"
+test -d "$image" || fail "Pinned image is missing."
+
+
+echo "IMAGE DIAGNOSTIC ONLY — NO RESTORE"
+uname -r
+sha256sum --version | head -n 1
+
+python3 - "$image/root.pcl" <<'CHECK'
+import hashlib
+import ssl
+import subprocess
+import sys
+import time
+
+path = sys.argv[1]
+expected = "04dc5c4c17737ab00b3b739de504387e3feb4cc2553d23e178fb689f0e639e7d"
+print("Expected:", expected, flush=True)
+print("Python:", sys.version.split()[0], flush=True)
+print("OpenSSL:", ssl.OPENSSL_VERSION, flush=True)
+
+results = []
+for attempt in (1, 2):
+    started = time.monotonic()
+    result = subprocess.run(
+        ["sha256sum", path], text=True, capture_output=True
+    )
+    if result.returncode:
+        print(result.stderr, flush=True)
+        raise SystemExit(result.returncode)
+    actual = result.stdout.split()[0]
+    results.append(actual)
+    print(
+        f"Read {attempt} sha256sum: {actual} "
+        f"match={actual == expected} "
+        f"seconds={time.monotonic() - started:.1f}",
+        flush=True
+    )
+
+    started = time.monotonic()
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        while chunk := stream.read(8 * 1024 * 1024):
+            digest.update(chunk)
+    actual = digest.hexdigest()
+    results.append(actual)
+    print(
+        f"Read {attempt} Python:    {actual} "
+        f"match={actual == expected} "
+        f"seconds={time.monotonic() - started:.1f}",
+        flush=True
+    )
+
+print("ALL_READS_MATCH=" + str(all(x == expected for x in results)), flush=True)
+print("Diagnostic complete. No restore was attempted.", flush=True)
+CHECK

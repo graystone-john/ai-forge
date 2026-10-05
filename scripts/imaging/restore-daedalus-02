@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+fail() { echo "RESTORE FAILED: $*" >&2; exit 1; }
+
+test "$(id -u)" -eq 0 || fail "Run as root in the offline environment."
+
+for tool in lsblk findmnt blkid blockdev mount mountpoint umount \
+            sfdisk partclone.ext4 partclone.fat sha256sum python3 sync; do
+    command -v "$tool" >/dev/null || fail "Missing tool: $tool"
+done
+
+started="$(date -u +%FT%TZ)"
+started_seconds="$(date +%s)"
+image_name=ubuntu-24.04-ai-stack-20261005T054838Z
+
+
+restore_run_id="${AI_FORGE_RESTORE_RUN_ID:?Missing restore run ID}"
+[[ "$restore_run_id" =~ ^[0-9a-f]{32}$ ]] ||
+    fail "Invalid restore run ID."
+verify_mode="${AI_FORGE_IMAGE_VERIFY:-full}"
+case "$verify_mode" in
+    full|fast) ;;
+    *) fail "Invalid verification mode: $verify_mode" ;;
+esac
+echo "Image verification mode: $verify_mode"
+
+resolve_disk() {
+    lsblk --json --nodeps --output PATH,SERIAL,TYPE |
+        python3 -c '
+import json, sys
+matches = [
+    d["path"] for d in json.load(sys.stdin)["blockdevices"]
+    if d["type"] == "disk" and
+       (d.get("serial") or "").strip() == sys.argv[1]
+]
+if len(matches) != 1:
+    raise SystemExit("Expected exactly one disk: " + sys.argv[1])
+print(matches[0])
+' "$1"
+}
+
+os_disk="$(resolve_disk 23122X800326)"
+accelerator_disk="$(resolve_disk 21052C800059)"
+test "$os_disk" != "$accelerator_disk" || fail "Disks overlap."
+test "$(blockdev --getsize64 "$os_disk")" = 4000787030016 ||
+    fail "Unexpected OS disk size."
+test "$(blockdev --getss "$os_disk")" = 512 ||
+    fail "Unexpected logical sector size."
+
+efi="${os_disk}p1"
+root_partition="${os_disk}p2"
+accelerator="${accelerator_disk}p1"
+
+for device in "$efi" "$root_partition" "$accelerator"; do
+    test -b "$device" || fail "Missing partition: $device"
+done
+
+test "$(blkid -s UUID -o value "$accelerator")" = \
+    87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c ||
+    fail "Unexpected accelerator UUID."
+
+check_offline() {
+    lsblk --json --output PATH,MOUNTPOINTS,TYPE "$os_disk" |
+        python3 -c '
+import json, sys
+def check(node):
+    if any(node.get("mountpoints") or []):
+        raise SystemExit("OS device is mounted/active: " + node["path"])
+    if node["type"] not in ("disk", "part"):
+        raise SystemExit("Active device holder: " + node["path"])
+    for child in node.get("children", []):
+        check(child)
+for node in json.load(sys.stdin)["blockdevices"]:
+    check(node)
+'
+}
+check_offline
+
+if findmnt --source "$accelerator" >/dev/null; then
+    fail "Accelerator already mounted."
+fi
+
+store_mount=/run/ai-forge-restore-store
+mkdir -p "$store_mount"
+mountpoint -q "$store_mount" && fail "Mountpoint occupied."
+mount -t ext4 -o ro,noload "$accelerator" "$store_mount"
+trap 'umount "$store_mount" || true' EXIT
+
+image="$store_mount/images/daedalus-02/$image_name"
+test -d "$image" || fail "Pinned image is missing."
+
+if [ "$verify_mode" = full ]; then
+(
+    cd "$image"
+    sha256sum --check <<'SUMS'
+04dc5c4c17737ab00b3b739de504387e3feb4cc2553d23e178fb689f0e639e7d  root.pcl
+60307f3f00b5832b39a2a4864e86bf39a5dc20f876c91ad74ae1bd69f880cf9e  efi.pcl
+8811cc68ccc298ab92c509e37e1ef8a5b9235437b2dc8d3dbc672e7d8f44925a  partition-table.sfdisk
+d305b7e1b47f22e801fcaf92328157578ea2b41d72ea9651bbf55bcca87cc62e  source-disk.json
+6a36c62b760877af7f71326c957760baa99ff4e6fcee24bd7c6b296c03e7bf10  capture.txt
+SUMS
+)
+else
+    echo "Fast mode: checking metadata; skipping image SHA256 pre-read."
+    (
+        cd "$image"
+        sha256sum --check <<'SUMS'
+8811cc68ccc298ab92c509e37e1ef8a5b9235437b2dc8d3dbc672e7d8f44925a  partition-table.sfdisk
+d305b7e1b47f22e801fcaf92328157578ea2b41d72ea9651bbf55bcca87cc62e  source-disk.json
+6a36c62b760877af7f71326c957760baa99ff4e6fcee24bd7c6b296c03e7bf10  capture.txt
+SUMS
+    )
+fi
+
+python3 - "$os_disk" "$image/partition-table.sfdisk" <<'PY'
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+def normalize(text):
+    match = re.search(r"^device:\s*(\S+)\s*$", text, re.M)
+    if not match:
+        raise SystemExit("GPT dump has no device header.")
+    text = text.replace(match.group(1), "/dev/OS_DISK")
+    return "\n".join(
+        " ".join(line.split())
+        for line in text.splitlines() if line.strip()
+    )
+
+saved = Path(sys.argv[2]).read_text()
+current = subprocess.check_output(
+    ["sfdisk", "--dump", sys.argv[1]], text=True
+)
+if normalize(saved) != normalize(current):
+    raise SystemExit("GPT differs from captured layout. No restore performed.")
+print("Verified: GPT geometry and partition UUIDs match.")
+PY
+
+check_offline
+verified_seconds="$(date +%s)"
+
+echo "Restoring $image_name to $os_disk"
+partclone.ext4 -r -s "$image/root.pcl" -o "$root_partition"
+partclone.fat -r -s "$image/efi.pcl" -o "$efi"
+sync
+
+python3 - "$image/source-disk.json" "$os_disk" <<'PY'
+import json
+import subprocess
+import sys
+
+with open(sys.argv[1]) as source:
+    devices = json.load(source)["blockdevices"]
+
+def flatten(nodes):
+    for node in nodes:
+        yield node
+        yield from flatten(node.get("children", []))
+
+nodes = list(flatten(devices))
+disks = [node for node in nodes if node["type"] == "disk"]
+if len(disks) != 1 or disks[0].get("serial", "").strip() != "23122X800326":
+    raise SystemExit("Unexpected captured OS disk.")
+disk = disks[0]
+parts = [
+    node for node in nodes
+    if node["type"] == "part"
+    and node["path"] in (disk["path"] + "p1", disk["path"] + "p2")
+]
+if len(parts) != 2:
+    raise SystemExit("Unexpected captured partition count.")
+for number, expected_type in ((1, "vfat"), (2, "ext4")):
+    saved = next(p for p in parts if p["path"].endswith(f"p{number}"))
+    target = sys.argv[2] + f"p{number}"
+    for field, expected in (("TYPE", expected_type), ("UUID", saved["uuid"])):
+        actual = subprocess.check_output(
+            ["blkid", "-p", "-s", field, "-o", "value", target], text=True
+        ).strip()
+        if actual != expected:
+            raise SystemExit(f"Restored {target} {field} mismatch")
+print("Verified: restored filesystem types and UUIDs.")
+PY
+
+finished_seconds="$(date +%s)"
+finished="$(date -u +%FT%TZ)"
+
+umount "$store_mount"
+mount -t ext4 -o rw "$accelerator" "$store_mount"
+mkdir -p "$store_mount/images/daedalus-02/restore-runs"
+record="$store_mount/images/daedalus-02/restore-runs/$(date -u +%Y%m%dT%H%M%SZ).txt"
+
+cat > "$record" <<EOF
+image=$image_name
+os_disk_serial=23122X800326
+verification_mode=$verify_mode
+restore_run_id=$restore_run_id
+started_utc=$started
+finished_utc=$finished
+preflight_seconds=$((verified_seconds - started_seconds))
+restore_and_verify_seconds=$((finished_seconds - verified_seconds))
+total_script_seconds=$((finished_seconds - started_seconds))
+status=restored-boot-validation-pending
+EOF
+
+cat "$record"
+sync
+umount "$store_mount"
+trap - EXIT
+echo "RESTORE_COMPLETE=$image_name"

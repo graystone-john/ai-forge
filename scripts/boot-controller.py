@@ -80,14 +80,18 @@ class Handler(BaseHTTPRequestHandler):
         except FileNotFoundError:
             mode = "normal"
 
-        if mode == "provision":
-            # Consume provisioning before sending the destructive boot script.
+        if mode in ("provision", "capture", "restore"):
+            # Consume every one-shot request before returning its boot file.
             state_file.write_text("normal\n", encoding="utf-8")
 
-            selected = machine_http / "provision.ipxe"
+            if mode in ("capture", "restore") and machine != "daedalus-02":
+                self.send_error(400, "Imaging currently supports daedalus-02 only")
+                return
+
+            selected = machine_http / f"{mode}.ipxe"
 
             print(
-                f"{machine}: consumed PROVISION -> NORMAL",
+                f"{machine}: consumed {mode.upper()} -> NORMAL",
                 flush=True,
             )
 

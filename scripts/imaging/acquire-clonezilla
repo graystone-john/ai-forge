@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+VERSION=3.3.3-37
+ARCHIVE="clonezilla-live-${VERSION}-amd64.zip"
+EXPECTED=bbb02b409708cf37774debe00f96c642c59c48ebb216f7349dc2252f705ff10e
+
+STORE="$ROOT/../ai-stores/vault/clonezilla/$VERSION/amd64"
+BOOT="$ROOT/runtime/http/imaging/clonezilla-$VERSION"
+mkdir -p "$STORE" "$BOOT"
+
+if [ ! -f "$STORE/$ARCHIVE" ]; then
+    curl --fail --location --retry 3 \
+        "https://downloads.sourceforge.net/project/clonezilla/clonezilla_live_stable/$VERSION/$ARCHIVE" \
+        --output "$STORE/$ARCHIVE.partial"
+    printf '%s  %s\n' "$EXPECTED" "$STORE/$ARCHIVE.partial" |
+        sha256sum -c -
+    mv "$STORE/$ARCHIVE.partial" "$STORE/$ARCHIVE"
+fi
+
+printf '%s  %s\n' "$EXPECTED" "$STORE/$ARCHIVE" |
+    sha256sum -c -
+
+python3 - "$STORE/$ARCHIVE" "$BOOT" <<'PY'
+from pathlib import Path
+import shutil
+import sys
+import zipfile
+
+destination = Path(sys.argv[2])
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    for name in ("vmlinuz", "initrd.img", "filesystem.squashfs"):
+        target = destination / name
+        temporary = target.with_name(name + ".partial")
+        with archive.open("live/" + name) as source:
+            with temporary.open("wb") as output:
+                shutil.copyfileobj(source, output)
+        temporary.chmod(0o644)
+        temporary.replace(target)
+        print("Prepared:", target)
+PY
+
+ls -lh "$BOOT"

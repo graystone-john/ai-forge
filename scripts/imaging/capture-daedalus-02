@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+fail() { echo "CAPTURE FAILED: $*" >&2; exit 1; }
+
+test "$(id -u)" -eq 0 || fail "Run as root in the offline imaging environment."
+
+for tool in lsblk findmnt blkid mount umount sfdisk \
+            partclone.ext4 partclone.fat partclone.chkimg \
+            sha256sum python3 sync; do
+    command -v "$tool" >/dev/null || fail "Missing tool: $tool"
+done
+
+resolve_disk() {
+    lsblk --json --nodeps --output PATH,SERIAL,TYPE |
+        python3 -c '
+import json, sys
+serial = sys.argv[1]
+matches = [
+    d["path"] for d in json.load(sys.stdin)["blockdevices"]
+    if d["type"] == "disk" and (d.get("serial") or "").strip() == serial
+]
+if len(matches) != 1:
+    raise SystemExit("Expected exactly one disk with serial " + serial)
+print(matches[0])
+' "$1"
+}
+
+os_disk="$(resolve_disk 23122X800326)"
+accelerator_disk="$(resolve_disk 21052C800059)"
+test "$os_disk" != "$accelerator_disk" || fail "Source and destination disks overlap."
+
+# Resolve partitions from the verified disks, not their boot-time numbering.
+efi="${os_disk}p1"
+root="${os_disk}p2"
+accelerator="${accelerator_disk}p1"
+
+test -b "$efi" && test -b "$root" && test -b "$accelerator" ||
+    fail "Expected partition layout is missing."
+
+test "$(blkid -s TYPE -o value "$root")" = ext4 ||
+    fail "OS root is not ext4."
+test "$(blkid -s TYPE -o value "$efi")" = vfat ||
+    fail "EFI partition is not FAT."
+test "$(blkid -s UUID -o value "$accelerator")" = \
+    87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c ||
+    fail "Unexpected accelerator UUID."
+
+# Reject mounted OS filesystems, active swap, or device-mapper users.
+lsblk --json --output PATH,MOUNTPOINTS,TYPE "$os_disk" |
+    python3 -c '
+import json, sys
+def check(node):
+    if any(node.get("mountpoints") or []):
+        raise SystemExit("OS device is mounted or active: " + node["path"])
+    if node["type"] not in ("disk", "part"):
+        raise SystemExit("OS device has an active holder: " + node["path"])
+    for child in node.get("children", []):
+        check(child)
+for disk in json.load(sys.stdin)["blockdevices"]:
+    check(disk)
+'
+
+if findmnt --source "$accelerator" >/dev/null; then
+    fail "Accelerator is already mounted; prepare the imaging environment first."
+fi
+
+mountpoint=/run/ai-forge-image-store
+mkdir -p "$mountpoint"
+mountpoint -q "$mountpoint" &&
+    fail "Image-store mountpoint is already occupied."
+
+mount -t ext4 -o rw "$accelerator" "$mountpoint"
+cleanup() {
+    sync
+    umount "$mountpoint" || true
+}
+trap cleanup EXIT
+
+available="$(df -B1 --output=avail "$mountpoint" | tail -n 1)"
+test "$available" -gt 107374182400 ||
+    fail "Require at least 100 GiB free for this initial capture."
+
+store="$mountpoint/images/daedalus-02"
+mkdir -p "$store"
+chmod 0700 "$store"
+
+stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+image="$store/ubuntu-24.04-ai-stack-$stamp"
+partial="${image}.partial"
+mkdir "$partial"
+
+started="$(date -u +%FT%TZ)"
+echo "Source: $os_disk"
+echo "Destination: $partial"
+
+sfdisk --dump "$os_disk" > "$partial/partition-table.sfdisk"
+lsblk --json --bytes --output \
+    PATH,SIZE,TYPE,FSTYPE,UUID,PARTUUID,MODEL,SERIAL "$os_disk" \
+    > "$partial/source-disk.json"
+
+partclone.ext4 -c -s "$root" -o "$partial/root.pcl"
+partclone.fat -c -s "$efi" -o "$partial/efi.pcl"
+
+partclone.chkimg -s "$partial/root.pcl"
+partclone.chkimg -s "$partial/efi.pcl"
+
+cat > "$partial/capture.txt" <<EOF
+machine=daedalus-02
+os_disk_serial=23122X800326
+accelerator_serial=21052C800059
+accelerator_uuid=87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c
+started_utc=$started
+finished_utc=$(date -u +%FT%TZ)
+stage=ai-stack-before-demo
+EOF
+
+(
+    cd "$partial"
+    sha256sum root.pcl efi.pcl partition-table.sfdisk \
+        source-disk.json capture.txt > SHA256SUMS
+    sha256sum -c SHA256SUMS
+)
+
+sync
+mv "$partial" "$image"
+sync
+
+echo "CAPTURE_COMPLETE=$image"
+du -sh "$image"

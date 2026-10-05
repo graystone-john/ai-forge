@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+mode="${1:-full}"
+case "$mode" in full|fast) ;; *) echo "Use full or fast" >&2; exit 2 ;; esac
+
+state="$ROOT/runtime/state/daedalus-02"
+mkdir -p "$state"
+
+exec 9>"$state/restore.lock"
+flock -n 9 || { echo "Another restore is running." >&2; exit 1; }
+
+ssh_cmd=(
+    ssh -T
+    -i "$ROOT/secrets/ssh/id_ed25519_ai_forge"
+    -o BatchMode=yes
+    -o IdentitiesOnly=yes
+    -o StrictHostKeyChecking=yes
+    -o ConnectTimeout=5
+    -o ServerAliveInterval=5
+    -o ServerAliveCountMax=2
+    ai-forge@10.10.10.21
+)
+
+cd "$ROOT"
+test "$(cat "$state/mode")" = normal
+systemctl is-active --quiet ai-forge-controller.service
+
+# Check every local branch in the agent's three project repositories.
+"${ssh_cmd[@]}" 'sudo -n -H -u daedalus bash -s' <<'REMOTE'
+set -euo pipefail
+for name in ai-forge ai-stores daedalus-sandbox; do
+    repo="/home/daedalus/graystone/$name"
+    [ -d "$repo" ] || continue
+    git -C "$repo" rev-parse --git-dir >/dev/null
+    test -z "$(git -C "$repo" status --porcelain)" || {
+        echo "Uncommitted work in $repo"; exit 1;
+    }
+    git -C "$repo" fetch origin
+    test "$(git -C "$repo" rev-list --count HEAD --branches --not --remotes=origin)" -eq 0 || {
+        echo "Unpushed work in $repo"; exit 1;
+    }
+done
+REMOTE
+
+run_id="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+python3 scripts/imaging/prepare-restore-boot.py \
+    --verify "$mode" --run-id "$run_id"
+
+# Verify that HTTP serves the files we just generated.
+for name in restore.ipxe clonezilla-restore.sh; do
+    curl --fail --silent --show-error --max-time 30 \
+        "http://10.10.10.1/pxe/daedalus-02/$name" |
+        cmp - "runtime/http/daedalus-02/$name"
+done
+
+started="$(date +%s)"
+mkdir -p "$state/restore-runs"
+log="$state/restore-runs/$run_id.txt"
+printf 'run_id=%s\nverification_mode=%s\nstarted_utc=%s\n' \
+    "$run_id" "$mode" "$(date -u +%FT%TZ)" > "$log"
+
+# Allow an initiating Hermes session time to disconnect.
+echo "Restore $run_id will start in 15 seconds."
+sleep 15
+
+./forge boot daedalus-02 pxe-next
+./scripts/set-mode daedalus-02 restore
+
+# Disarm the controller on exit, including timeout. Never retry a restore.
+cleanup() {
+    "$ROOT/scripts/set-mode" daedalus-02 normal >/dev/null || true
+}
+trap cleanup EXIT
+
+./forge boot daedalus-02 reboot
+
+deadline=$((SECONDS + 900))
+while (( SECONDS < deadline )); do
+    if result="$("${ssh_cmd[@]}" \
+        "sudo -n bash -s -- $run_id" 2>/dev/null <<'REMOTE'
+set -euo pipefail
+wanted="$1"
+directory=/mnt/ai-stores-accelerator/images/daedalus-02/restore-runs
+
+shopt -s nullglob
+matches=()
+for file in "$directory"/*.txt; do
+    if grep -qx "restore_run_id=$wanted" "$file"; then
+        matches+=("$file")
+    fi
+done
+test "${#matches[@]}" -eq 1 || exit 75
+file="${matches[0]}"
+
+grep -qx 'image=ubuntu-24.04-ai-stack-20261005T054838Z' "$file"
+grep -qx 'os_disk_serial=23122X800326' "$file"
+grep -qx 'status=restored-boot-validation-pending' "$file"
+systemctl is-active --quiet ai-forge-inference.service
+
+curl --fail --silent --show-error --max-time 10 \
+    http://127.0.0.1:8080/health |
+    python3 -c 'import json,sys; assert json.load(sys.stdin)["status"] == "ok"'
+
+cat "$file"
+REMOTE
+    )"; then
+        printf '%s\n' "$result" | tee -a "$log"
+        elapsed=$(( $(date +%s) - started ))
+        printf 'launch_to_healthy_seconds=%s\nstatus=boot-and-inference-verified\n' \
+            "$elapsed" | tee -a "$log"
+        exit 0
+    fi
+    echo "Waiting for restore $run_id and healthy inference..."
+    sleep 5
+done
+
+echo "Restore timed out. Inspect Daedalus; do not retry automatically." >&2
+exit 1

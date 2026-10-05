@@ -1,0 +1,63 @@
+id: ai-forge-start-restore
+namespace: graystone
+
+description: |
+  Start Daedalus-02 image restoration and return its execution ID.
+  DESTRUCTIVE: overwrites the OS partitions with the captured AI stack.
+
+inputs:
+  - id: verification
+    type: SELECT
+    required: true
+    defaults: full
+    values:
+      - full
+      - fast
+
+  - id: setup_demo
+    type: BOOL
+    required: true
+    defaults: false
+
+tasks:
+  - id: start_restore
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: graystone
+    flowId: ai-forge-restore
+    inputs:
+      verification: "{{ inputs.verification }}"
+      setup_demo: "{{ inputs.setup_demo }}"
+    wait: false
+    transmitFailed: false
+
+outputs:
+  - id: execution_id
+    type: STRING
+    value: "{{ outputs.start_restore.executionId }}"
+
+  - id: machine
+    type: STRING
+    value: daedalus-02
+
+  - id: status
+    type: STRING
+    value: "Restore launched; completion has not been verified."
+
+triggers:
+  - id: mcp
+    type: io.kestra.plugin.core.trigger.McpToolTrigger
+    mcpServer: default
+    toolName: ai_forge_start_restore
+    title: Restore Daedalus-02 AI stack
+    toolDescription: |
+      DESTRUCTIVE: restores Daedalus-02 OS partitions from its pinned
+      accelerator SSD image. Supports Daedalus-02 only.
+      Use only when the user explicitly requests image restoration
+      and local work has been preserved remotely.
+      verification=full verifies image SHA256 checksums before restoring.
+      verification=fast skips the full image SHA256 pre-read.
+      setup_demo=true configures the demo after restoration.
+      Returns an execution ID, not proof of completion.
+      Launch once. Do not retry automatically after a timeout;
+      inspect Kestra for an existing execution first.
+      Report the execution ID, then stop making tool calls.
