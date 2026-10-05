@@ -111,7 +111,11 @@ BODY
 
 url="$(gh pr create --repo "$repo" --base main --head "$branch" \
     --title "Reset demo to Cycle 0 baseline" \
-    --body-file "$temp_root/pr-body.md" --reviewer graystone-john)"
+    --body-file "$temp_root/pr-body.md")"
+
+if ! gh pr edit "$url" --repo "$repo" --add-reviewer graystone-john; then
+    echo "WARNING: PR created, but reviewer assignment failed; review manually: $url" >&2
+fi
 
 echo "RESET_PR_CREATED=$url"
 echo "RESET_PR=$url"
