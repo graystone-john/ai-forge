@@ -73,6 +73,21 @@ echo "IP:      $IP"
 echo "Action:  $ACTION"
 echo
 
+# Finish the active Hermes response before powering off Daedalus-02.
+# A failed handshake aborts before the shutdown command is dispatched.
+if [[ "$MACHINE" == "daedalus-02" && "$ACTION" == "poweroff" ]]; then
+    ssh -T \
+        -i "$SSH_KEY" \
+        -o BatchMode=yes \
+        -o IdentitiesOnly=yes \
+        -o StrictHostKeyChecking=yes \
+        -o ConnectTimeout=5 \
+        -o ServerAliveInterval=5 \
+        -o ServerAliveCountMax=2 \
+        "$SSH_USER@$IP" \
+        'sudo -n python3 -' < "$ROOT/scripts/imaging/close-hermes.py"
+fi
+
 if [[ "$ACTION" == "reboot" || "$ACTION" == "poweroff" ]]; then
     #
     # reboot/poweroff can terminate sshd before SSH receives the remote
