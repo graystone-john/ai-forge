@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+version=3.3.3-37
+asset="$ROOT/runtime/http/imaging/clonezilla-$version/filesystem.squashfs"
+
+# Reconstruct and verify boot assets from the pinned archive.
+bash "$ROOT/scripts/imaging/acquire-clonezilla"
+
+expected="$(sha256sum "$asset")"
+expected="${expected%% *}"
+
+ssh_cmd=(
+    ssh -T
+    -i "$ROOT/secrets/ssh/id_ed25519_ai_forge"
+    -o BatchMode=yes
+    -o IdentitiesOnly=yes
+    -o StrictHostKeyChecking=yes
+    -o ConnectTimeout=5
+    -o ServerAliveInterval=5
+    -o ServerAliveCountMax=2
+    ai-forge@10.10.10.21
+)
+
+# Pass script as a command argument, leaving stdin for the binary asset.
+remote_script="$(cat <<'REMOTE'
+set -euo pipefail
+version="$1"
+expected="$2"
+mountpoint=/mnt/ai-stores-accelerator
+
+actual="$(findmnt -n -M "$mountpoint" -o UUID)"
+test "$actual" = 87793e9a-50dc-4f4e-ad19-b8a6d42d7a3c || {
+    echo "Unexpected or missing accelerator mount." >&2
+    exit 1
+}
+
+directory="$mountpoint/boot/clonezilla-$version/live"
+mkdir -p "$directory"
+temporary="$(mktemp "$directory/.filesystem.XXXXXXXX")"
+trap 'rm -f "$temporary"' EXIT
+
+cat > "$temporary"
+printf '%s  %s\n' "$expected" "$temporary" | sha256sum -c -
+chmod 0644 "$temporary"
+mv -f "$temporary" "$directory/filesystem.squashfs"
+sync
+trap - EXIT
+echo "Clonezilla filesystem staged and verified on accelerator SSD."
+REMOTE
+)"
+
+# POSIX shell quoting for the command sent through SSH.
+quoted_script="'${remote_script//\'/\'\\\'\'}'"
+"${ssh_cmd[@]}" \
+    "sudo -n bash -c $quoted_script -- '$version' '$expected'" < "$asset"
