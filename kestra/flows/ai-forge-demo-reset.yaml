@@ -1,0 +1,35 @@
+id: ai-forge-demo-reset
+namespace: graystone
+
+description: |
+  Restore the sandbox page and task to Cycle 0 through a human-reviewed PR.
+  Wait up to approximately one hour for merge, then update and verify
+  the running demo. Does not reinstall the operating system.
+
+inputs:
+  - id: machine
+    type: SELECT
+    required: true
+    defaults: daedalus-02
+    values:
+      - daedalus-02
+
+tasks:
+  - id: reset_demo
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    env:
+      FORGE_MACHINE: "{{ inputs.machine }}"
+      ANSIBLE_SSH_PIPELINING: "true"
+      PYTHONUNBUFFERED: "1"
+    commands:
+      - |
+        set -eu
+        test "$FORGE_MACHINE" = daedalus-02
+        cd /home/nispoe/graystone/ai-forge/ansible
+        ansible-playbook playbooks/demo-reset.yaml --limit "$FORGE_MACHINE"
+
+  - id: reset_complete
+    type: io.kestra.plugin.core.log.Log
+    message: "Demo baseline restored and served page verified for {{ inputs.machine }}."

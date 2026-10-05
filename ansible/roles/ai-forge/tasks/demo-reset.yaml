@@ -24,10 +24,46 @@
       - "GIT_SSH_COMMAND=ssh -F /home/daedalus/.ssh/demo-github.conf"
       - "GH_CONFIG_DIR=/home/daedalus/.config/gh"
       - /usr/local/bin/daedalus-demo-reset
+      - prepare
     chdir: /
   register: demo_reset_result
   changed_when: "'RESET_PR_CREATED=' in demo_reset_result.stdout"
 
-- name: Report reset result
+- name: Report reset pull request
   ansible.builtin.debug:
     var: demo_reset_result.stdout_lines
+
+- name: Record reset pull request
+  ansible.builtin.set_fact:
+    demo_reset_pr: >-
+      {{ demo_reset_result.stdout_lines
+         | select('match', '^RESET_PR=')
+         | first | regex_replace('^RESET_PR=', '') }}
+
+- name: Wait for human merge and update the running demo
+  become: true
+  become_user: root
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/sudo
+      - -n
+      - -H
+      - -u
+      - daedalus
+      - /usr/bin/env
+      - "GIT_SSH_COMMAND=ssh -F /home/daedalus/.ssh/demo-github.conf"
+      - "GH_CONFIG_DIR=/home/daedalus/.config/gh"
+      - /usr/local/bin/daedalus-demo-reset
+      - apply
+      - "{{ demo_reset_pr }}"
+    chdir: /
+  register: demo_reset_apply
+  until: demo_reset_apply.rc != 75
+  retries: 240
+  delay: 15
+  failed_when: demo_reset_apply.rc not in [0, 75]
+  changed_when: "'RESET_CHECKOUT_UPDATED' in demo_reset_apply.stdout"
+
+- name: Report reset completion
+  ansible.builtin.debug:
+    var: demo_reset_apply.stdout_lines
