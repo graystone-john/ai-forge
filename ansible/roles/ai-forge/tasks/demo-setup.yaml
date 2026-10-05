@@ -6,6 +6,47 @@
       - agent_workspace is defined
       - agent_identity.user == 'daedalus'
 
+- name: Install GitHub CLI
+  ansible.builtin.package:
+    name: gh
+    state: present
+
+- name: Ensure GitHub CLI configuration directory exists
+  ansible.builtin.file:
+    path: /home/daedalus/.config/gh
+    state: directory
+    owner: daedalus
+    group: daedalus
+    mode: "0700"
+
+- name: Install demo GitHub CLI credentials
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../../secrets/agents/daedalus/gh-hosts.yml"
+    dest: /home/daedalus/.config/gh/hosts.yml
+    owner: daedalus
+    group: daedalus
+    mode: "0600"
+  no_log: true
+  diff: false
+
+- name: Verify demo GitHub CLI identity
+  become_user: daedalus
+  ansible.builtin.command:
+    argv:
+      - gh
+      - api
+      - user
+      - --jq
+      - .login
+    chdir: /home/daedalus
+  environment:
+    GH_CONFIG_DIR: /home/daedalus/.config/gh
+  register: demo_gh_identity
+  changed_when: false
+  failed_when: >-
+    demo_gh_identity.rc != 0 or
+    (demo_gh_identity.stdout | trim) != 'graystone-daedalus'
+
 - name: Ensure agent workspace root exists
   ansible.builtin.file:
     path: /home/daedalus/graystone
