@@ -1,0 +1,60 @@
+id: ai-forge-start-provision
+namespace: graystone
+
+description: |
+  Start end-to-end provisioning and return its execution ID.
+  Wipes and reinstalls the selected machine's configured OS disk.
+
+inputs:
+  - id: machine
+    type: SELECT
+    required: true
+    values:
+      - daedalus-01
+      - daedalus-02
+
+  - id: os
+    type: SELECT
+    required: true
+    values:
+      - ubuntu-24.04
+      - arch-2026.09.01
+
+tasks:
+  - id: start_provision
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: graystone
+    flowId: ai-forge-end-to-end-provision
+    inputs:
+      machine: "{{ inputs.machine }}"
+      os: "{{ inputs.os }}"
+      setup_demo: "{{ inputs.setup_demo }}"
+    wait: false
+    transmitFailed: false
+
+outputs:
+  - id: execution_id
+    type: STRING
+    value: "{{ outputs.start_provision.executionId }}"
+
+  - id: machine
+    type: STRING
+    value: "{{ inputs.machine }}"
+
+  - id: status
+    type: STRING
+    value: "Provisioning launched; completion has not been verified."
+
+triggers:
+  - id: mcp
+    type: io.kestra.plugin.core.trigger.McpToolTrigger
+    mcpServer: default
+    toolName: ai_forge_start_provision
+    title: Start AI Forge provisioning
+    toolDescription: |
+      DESTRUCTIVE: wipes and reinstalls the selected machine's configured
+      OS disk, then configures its AI stack. Use only when the user
+      explicitly requests a full rebuild of that machine and its work
+      has been preserved remotely. Returns an execution ID, not proof
+      of completion. Do not retry automatically after a timeout;
+      check Kestra for an existing execution first.

@@ -22,6 +22,11 @@ inputs:
       - ubuntu-24.04
       - arch-2026.09.01
 
+  - id: setup_demo
+    type: BOOL
+    displayName: Set up Daedalus demo
+    defaults: false
+
 tasks:
   - id: ensure_machine_ready
     type: io.kestra.plugin.scripts.shell.Commands
@@ -39,7 +44,12 @@ tasks:
 
         cd /home/nispoe/graystone/ai-forge
 
-        ./forge status "$FORGE_MACHINE"
+        status_rc=0
+        ./forge status "$FORGE_MACHINE" || status_rc=$?
+        case "$status_rc" in
+          0|10) ;;
+          *) exit "$status_rc" ;;
+        esac
 
         if ./forge wait "$FORGE_MACHINE" \
           --for ssh --timeout 10 --interval 2; then
@@ -111,3 +121,16 @@ tasks:
       os: "{{ inputs.os }}"
     wait: true
     transmitFailed: true
+
+  - id: optional_demo_setup
+    type: io.kestra.plugin.core.flow.If
+    condition: "{{ inputs.setup_demo and inputs.machine == 'daedalus-02' }}"
+    then:
+      - id: setup_demo
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: graystone
+        flowId: ai-forge-demo-setup
+        inputs:
+          machine: "{{ inputs.machine }}"
+        wait: true
+        transmitFailed: true
