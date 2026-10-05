@@ -74,6 +74,15 @@ tasks:
     wait: true
     transmitFailed: true
 
+  - id: allow_client_disconnect
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    commands:
+      - |
+        echo "Provisioning starts in 15 seconds; the requesting client may disconnect."
+        sleep 15
+
   - id: provision_os
     type: io.kestra.plugin.core.flow.Subflow
     namespace: graystone
