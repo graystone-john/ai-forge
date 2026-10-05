@@ -61,9 +61,7 @@ log="$state/restore-runs/$run_id.txt"
 printf 'run_id=%s\nverification_mode=%s\nstarted_utc=%s\n' \
     "$run_id" "$mode" "$(date -u +%FT%TZ)" > "$log"
 
-# Allow an initiating Hermes session time to disconnect.
-echo "Restore $run_id will start in 15 seconds."
-sleep 15
+echo "Restore $run_id preflight complete; starting PXE restore."
 
 ./forge boot daedalus-02 pxe-next
 ./scripts/set-mode daedalus-02 restore
