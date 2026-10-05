@@ -1,0 +1,10 @@
+---
+- name: Install Daedalus Hermes exit handshake
+  hosts: daedalus-02
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Apply Hermes exit integration
+      ansible.builtin.include_role:
+        name: ai-forge
+        tasks_from: demo-hermes-exit.yaml

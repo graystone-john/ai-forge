@@ -205,3 +205,6 @@
     group: root
     mode: "0755"
     validate: /bin/bash -n %s
+
+- name: Configure Hermes automatic exit before restore
+  ansible.builtin.include_tasks: demo-hermes-exit.yaml

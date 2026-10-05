@@ -1,0 +1,18 @@
+---
+- name: Install Hermes exit handshake
+  become: true
+  become_user: root
+  ansible.builtin.script:
+    cmd: install-hermes-exit.py
+    executable: /usr/bin/python3
+
+- name: Preserve Hermes handshake directory across boots
+  become: true
+  become_user: root
+  ansible.builtin.copy:
+    dest: /etc/tmpfiles.d/ai-forge-hermes-exit.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      d /run/ai-forge-hermes-exit 0700 daedalus daedalus -

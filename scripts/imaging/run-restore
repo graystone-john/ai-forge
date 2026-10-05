@@ -61,6 +61,9 @@ log="$state/restore-runs/$run_id.txt"
 printf 'run_id=%s\nverification_mode=%s\nstarted_utc=%s\n' \
     "$run_id" "$mode" "$(date -u +%FT%TZ)" > "$log"
 
+# Complete the initiating TUI response and wait for session processes.
+"${ssh_cmd[@]}" 'sudo -n python3 -' < "$ROOT/scripts/imaging/close-hermes.py"
+
 echo "Restore $run_id preflight complete; starting PXE restore."
 
 ./forge boot daedalus-02 pxe-next
