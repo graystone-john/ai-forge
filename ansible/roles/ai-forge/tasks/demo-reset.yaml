@@ -1,0 +1,33 @@
+---
+- name: Install demo reset script
+  become: true
+  become_user: root
+  ansible.builtin.copy:
+    src: demo-reset.sh
+    dest: /usr/local/bin/daedalus-demo-reset
+    owner: root
+    group: root
+    mode: "0755"
+    validate: /bin/bash -n %s
+
+- name: Prepare baseline reset branch and pull request
+  become: true
+  become_user: root
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/sudo
+      - -n
+      - -H
+      - -u
+      - daedalus
+      - /usr/bin/env
+      - "GIT_SSH_COMMAND=ssh -F /home/daedalus/.ssh/demo-github.conf"
+      - "GH_CONFIG_DIR=/home/daedalus/.config/gh"
+      - /usr/local/bin/daedalus-demo-reset
+    chdir: /
+  register: demo_reset_result
+  changed_when: "'RESET_PR_CREATED=' in demo_reset_result.stdout"
+
+- name: Report reset result
+  ansible.builtin.debug:
+    var: demo_reset_result.stdout_lines

@@ -1,0 +1,16 @@
+---
+- name: Prepare Daedalus sandbox reset pull request
+  hosts: daedalus
+  gather_facts: false
+  become: true
+
+  pre_tasks:
+    - name: Require supported reset target
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'daedalus-02'
+
+  roles:
+    - role: ai-forge
+      vars:
+        ai_forge_stage: demo-reset
