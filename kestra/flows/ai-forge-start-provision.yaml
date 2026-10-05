@@ -20,6 +20,11 @@ inputs:
       - ubuntu-24.04
       - arch-2026.09.01
 
+  - id: setup_demo
+    type: BOOL
+    displayName: Set up Daedalus demo
+    defaults: false
+
 tasks:
   - id: start_provision
     type: io.kestra.plugin.core.flow.Subflow
