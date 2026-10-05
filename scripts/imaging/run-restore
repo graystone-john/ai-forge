@@ -37,7 +37,7 @@ for name in ai-forge ai-stores daedalus-sandbox; do
     test -z "$(git -C "$repo" status --porcelain)" || {
         echo "Uncommitted work in $repo"; exit 1;
     }
-    git -C "$repo" fetch origin
+    git -C "$repo" fetch --quiet origin
     test "$(git -C "$repo" rev-list --count HEAD --branches --not --remotes=origin)" -eq 0 || {
         echo "Unpushed work in $repo"; exit 1;
     }
