@@ -243,6 +243,13 @@ def main():
     print(f"Serial: {resolved['serial']}")
     print()
 
+    # Verify canonical identity availability before destructive disk commands.
+    identity = spec.get("host_identity", "")
+    if machine["name"] == "daedalus-02" and not identity:
+        raise RuntimeError("Missing canonical Daedalus-02 host identity")
+    if identity:
+        subprocess.run([sys.executable, "-c", identity, "--check"], check=True)
+
     # Partition paths for NVMe.
     efi = Path(f"{device}p1")
     root = Path(f"{device}p2")
@@ -566,13 +573,11 @@ def main():
         0o644,
     )
 
-    # Generate fresh SSH host keys for this provisioned machine.
-    run(
-        "arch-chroot",
-        "/mnt",
-        "ssh-keygen",
-        "-A",
-    )
+    if identity:
+        subprocess.run([sys.executable, "-c", identity, "/mnt"], check=True)
+    else:
+        # Machines not enrolled in persistent identity retain existing behavior.
+        run("arch-chroot", "/mnt", "ssh-keygen", "-A")
 
     # Validate the management account and key before declaring success.
     run(

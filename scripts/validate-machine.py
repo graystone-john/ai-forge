@@ -81,7 +81,26 @@ if distribution == "ubuntu":
             "Autoinstall does not explicitly enable ssh.service"
         )
 
-    validate_generated(a, os_disk)
+    from host_identity import installer_command
+
+    identity_check = installer_command(machine_name, "--check")
+    disk_config = dict(a)
+    if identity_check:
+        commands = a.get("early-commands", [])
+        if (len(commands) != 2
+                or not isinstance(commands[1], str)
+                or commands[1].strip() != identity_check.strip()):
+            raise RuntimeError("Missing or altered canonical host-key preflight")
+
+        identity_install = installer_command(machine_name, "/target")
+        if (not late_commands
+                or not isinstance(late_commands[0], str)
+                or late_commands[0].strip() != identity_install.strip()):
+            raise RuntimeError("Missing or altered canonical host-key installation")
+
+        disk_config["early-commands"] = commands[:1]
+
+    validate_generated(disk_config, os_disk)
 
     if "autoinstall" not in provision:
         raise RuntimeError("provision.ipxe does not enable autoinstall")

@@ -62,6 +62,10 @@ autoinstall:
   early-commands:
     - |
 {{ disk_resolution_command | indent(6, true) }}
+{% if host_identity_check %}
+    - |
+{{ host_identity_check | indent(6, true) }}
+{% endif %}
 
   storage:
     config:
@@ -114,6 +118,10 @@ autoinstall:
   updates: security
 
   late-commands:
+{% if host_identity_install %}
+    - |
+{{ host_identity_install | indent(6, true) }}
+{% endif %}
     # Establish Wi-Fi naming before the installed system's first boot.
     - mkdir -p /target/etc/systemd/network
     - |

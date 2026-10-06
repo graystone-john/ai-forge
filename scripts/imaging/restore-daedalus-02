@@ -7,7 +7,7 @@ fail() { echo "RESTORE FAILED: $*" >&2; exit 1; }
 test "$(id -u)" -eq 0 || fail "Run as root in the offline environment."
 
 for tool in lsblk findmnt blkid blockdev mount mountpoint umount \
-            sfdisk partclone.ext4 partclone.fat sha256sum python3 sync; do
+            sfdisk udevadm efibootmgr partclone.ext4 partclone.fat sha256sum python3 sync; do
     command -v "$tool" >/dev/null || fail "Missing tool: $tool"
 done
 
@@ -53,7 +53,7 @@ efi="${os_disk}p1"
 root_partition="${os_disk}p2"
 accelerator="${accelerator_disk}p1"
 
-for device in "$efi" "$root_partition" "$accelerator"; do
+for device in "$accelerator"; do
     test -b "$device" || fail "Missing partition: $device"
 done
 
@@ -114,6 +114,11 @@ SUMS
     )
 fi
 
+test -d /sys/firmware/efi/efivars || fail "UEFI variables unavailable."
+efibootmgr >/dev/null
+test -s "$image/root.pcl" || fail "Root image missing."
+test -s "$image/efi.pcl" || fail "EFI image missing."
+check_offline
 python3 - "$os_disk" "$image/partition-table.sfdisk" <<'PY'
 from pathlib import Path
 import re
@@ -131,15 +136,26 @@ def normalize(text):
     )
 
 saved = Path(sys.argv[2]).read_text()
+# Restore the captured GPT, including its partition GUIDs.
+normalize(saved)
+device = re.search(r"^device:\s*(\S+)\s*$", saved, re.M).group(1)
+table = saved.replace(device, sys.argv[1])
+subprocess.run(
+    ["sfdisk", "--wipe", "never", "--wipe-partitions", "never", sys.argv[1]],
+    input=table, text=True, check=True
+)
+subprocess.run(["blockdev", "--rereadpt", sys.argv[1]], check=True)
+subprocess.run(["udevadm", "settle", "--timeout=30"], check=True)
 current = subprocess.check_output(
     ["sfdisk", "--dump", sys.argv[1]], text=True
 )
 if normalize(saved) != normalize(current):
-    raise SystemExit("GPT differs from captured layout. No restore performed.")
+    raise SystemExit("Written GPT does not match the image. Filesystem restore stopped.")
 print("Verified: GPT geometry and partition UUIDs match.")
 PY
 
 check_offline
+test -b "$efi" && test -b "$root_partition" || fail "Restored partitions missing."
 verified_seconds="$(date +%s)"
 
 echo "Restoring $image_name to $os_disk"
@@ -183,6 +199,60 @@ for number, expected_type in ((1, "vfat"), (2, "ext4")):
             raise SystemExit(f"Restored {target} {field} mismatch")
 print("Verified: restored filesystem types and UUIDs.")
 PY
+
+
+# Point firmware at the restored ESP, retaining other boot entries.
+python3 - "$os_disk" "$efi" <<'PYBOOT'
+import re
+import subprocess
+import sys
+
+def output(*args):
+    return subprocess.check_output(args, text=True)
+
+guid = output(
+    "blkid", "-p", "-s", "PART_ENTRY_UUID", "-o", "value", sys.argv[2]
+).strip().lower()
+if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", guid):
+    raise SystemExit("Cannot identify restored ESP GUID.")
+loader = r"\EFI\ubuntu\shimx64.efi"
+
+def matching(text):
+    return [
+        line[4:8] for line in text.splitlines()
+        if re.match(r"^Boot[0-9A-Fa-f]{4}[ *]", line)
+        and f"hd(1,gpt,{guid}," in line.lower()
+        and loader.lower() in line.lower()
+    ]
+
+entries = matching(output("efibootmgr", "-v"))
+if not entries:
+    subprocess.run([
+        "efibootmgr", "--create", "--disk", sys.argv[1],
+        "--part", "1", "--label", "Ubuntu (AI Forge)",
+        "--loader", loader
+    ], check=True)
+    entries = matching(output("efibootmgr", "-v"))
+if not entries:
+    raise SystemExit("Restored Ubuntu boot entry was not created.")
+
+entry = entries[0].upper()
+if not any(line.startswith(f"Boot{entry}*")
+           for line in output("efibootmgr", "-v").splitlines()):
+    raise SystemExit("Restored Ubuntu boot entry is not active.")
+state = output("efibootmgr")
+order = re.search(r"^BootOrder:\s*(\S+)", state, re.M)
+others = order.group(1).upper().split(",") if order else []
+order = ",".join([entry] + [x for x in others if x != entry])
+if not re.search(r"^BootOrder:\s*" + re.escape(order) + r"$", state, re.M):
+    subprocess.run(["efibootmgr", "--bootorder", order], check=True)
+if re.search(r"^BootNext:", output("efibootmgr"), re.M):
+    subprocess.run(["efibootmgr", "--delete-bootnext"], check=True)
+state = output("efibootmgr")
+if not re.search(r"^BootOrder:\s*" + re.escape(order) + r"$", state, re.M):
+    raise SystemExit("Firmware boot selection verification failed.")
+print("Verified: firmware points to restored Ubuntu.")
+PYBOOT
 
 finished_seconds="$(date +%s)"
 finished="$(date -u +%FT%TZ)"

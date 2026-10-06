@@ -4,6 +4,7 @@ from pathlib import Path
 import argparse
 import base64
 import yaml
+from host_identity import installer_source
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -63,6 +64,7 @@ def main():
         )
 
     spec = {
+        "host_identity": installer_source(args.machine),
         "machine": {
             "name": machine["name"],
             "architecture": machine["architecture"],

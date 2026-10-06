@@ -6,6 +6,7 @@ import base64
 import shutil
 
 import yaml
+from host_identity import installer_command
 from disk_resolver import early_command, SENTINEL
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
@@ -88,6 +89,8 @@ def main():
         "ssh_authorized_key": ssh_authorized_key,
         "provisioning_mac": machine["network"]["provisioning_mac"],
         "boot_control_b64": boot_control_b64,
+        "host_identity_check": installer_command(machine_name, "--check"),
+        "host_identity_install": installer_command(machine_name, "/target"),
     }
 
     if distribution == "ubuntu":

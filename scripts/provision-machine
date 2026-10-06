@@ -103,6 +103,15 @@ fi
 echo
 echo "Preparing provisioning configuration..."
 
+if [[ "$MACHINE" == "daedalus-02" ]]; then
+    python3 "$ROOT/scripts/host_identity.py" check "$MACHINE"
+    if [[ "$FIRST_INSTALL" -eq 0 ]]; then
+        python3 "$ROOT/scripts/host_identity.py" stage "$MACHINE"
+    fi
+    # Persistent identity must never be replaced by a newly presented key.
+    rm -f "$ROOT/runtime/state/$MACHINE/ssh-key-refresh"
+fi
+
 "$ROOT/scripts/deploy-machine" "$MACHINE"
 
 if [[ "$FIRST_INSTALL" -eq 1 ]]; then
@@ -187,12 +196,17 @@ STATE_DIR="$ROOT/runtime/state/$MACHINE"
 SSH_REFRESH_MARKER="$STATE_DIR/ssh-key-refresh"
 
 #
-# A successful reinstall is expected to generate a new SSH host key.
+# Machines without persistent identity generate a new SSH host key.
 # Record that expectation so wait-machine can safely handle exactly one
 # host-key transition after provisioning.
 #
-touch "$SSH_REFRESH_MARKER"
-echo "SSH host-key refresh armed."
+if [[ "$MACHINE" == "daedalus-02" ]]; then
+    rm -f "$SSH_REFRESH_MARKER"
+    echo "Persistent SSH host identity: existing trust retained."
+else
+    touch "$SSH_REFRESH_MARKER"
+    echo "SSH host-key refresh armed."
+fi
 
 echo
 echo "Rebooting $MACHINE into PXE..."
