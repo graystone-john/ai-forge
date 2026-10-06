@@ -141,6 +141,27 @@ if [[ "$FIRST_INSTALL" -eq 1 ]]; then
     exit 0
 fi
 
+# Finish Hermes before arming a destructive provisioning boot.
+# First-install mode exits above; a failed handshake aborts here.
+if [[ "$MACHINE" == "daedalus-02" ]]; then
+    SSH_KEY="$ROOT/secrets/ssh/id_ed25519_ai_forge"
+    SSH_USER="$(python3 -c 'import sys,yaml; print(yaml.safe_load(open(sys.argv[1])).get("defaults", {}).get("username", ""))' "$ROOT/config/forge.yaml")"
+    [[ -n "$SSH_USER" ]] || { echo "ERROR: Missing SSH username." >&2; exit 3; }
+    [[ -f "$SSH_KEY" ]] || { echo "ERROR: Missing AI Forge SSH key." >&2; exit 4; }
+
+    echo "Waiting for Hermes to finish and exit..."
+    ssh -T \
+        -i "$SSH_KEY" \
+        -o BatchMode=yes \
+        -o IdentitiesOnly=yes \
+        -o StrictHostKeyChecking=yes \
+        -o ConnectTimeout=5 \
+        -o ServerAliveInterval=5 \
+        -o ServerAliveCountMax=2 \
+        "$SSH_USER@$IP" \
+        'sudo -n python3 -' < "$ROOT/scripts/imaging/close-hermes.py"
+fi
+
 echo "Setting one-time PXE boot..."
 
 "$ROOT/scripts/boot-machine" "$MACHINE" pxe-next

@@ -2,7 +2,7 @@ id: ai-forge-start-provision
 namespace: graystone
 
 description: |
-  Start end-to-end provisioning and return its execution ID.
+  Start full provisioning and return its execution ID.
   Wipes and reinstalls the selected machine's configured OS disk.
 
 inputs:
@@ -29,7 +29,7 @@ tasks:
   - id: start_provision
     type: io.kestra.plugin.core.flow.Subflow
     namespace: graystone
-    flowId: ai-forge-end-to-end-provision
+    flowId: ai-forge-full-provision
     inputs:
       machine: "{{ inputs.machine }}"
       os: "{{ inputs.os }}"
