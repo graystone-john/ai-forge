@@ -6,10 +6,45 @@
       - agent_workspace is defined
       - agent_identity.user == 'daedalus'
 
-- name: Install GitHub CLI
-  ansible.builtin.package:
-    name: gh
-    state: present
+- name: Configure local demo package source
+  become: true
+  ansible.builtin.copy:
+    dest: /etc/apt/ai-forge-demo.list
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      deb [arch=amd64 trusted=yes] http://10.10.10.1:81/ai-stores/vault/linux/ubuntu/apt noble main
+
+- name: Ensure isolated demo package index directory exists
+  become: true
+  ansible.builtin.file:
+    path: /var/lib/apt/lists-ai-forge-demo
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install GitHub CLI from local AI Stores
+  become: true
+  ansible.builtin.shell: |
+    set -euo pipefail
+    apt_options=(
+      -o Dir::Etc::sourcelist=/etc/apt/ai-forge-demo.list
+      -o Dir::Etc::sourceparts=-
+      -o Dir::State::lists=/var/lib/apt/lists-ai-forge-demo
+      -o APT::Update::Error-Mode=any
+      -o Acquire::Languages=none
+      -o Acquire::http::Timeout=20
+      -o Acquire::Retries=0
+    )
+    apt-get "${apt_options[@]}" update
+    apt-get "${apt_options[@]}" install --yes --no-install-recommends --no-remove gh=2.45.0-1ubuntu0.3
+  args:
+    executable: /bin/bash
+    creates: /usr/bin/gh
+  environment:
+    DEBIAN_FRONTEND: noninteractive
 
 - name: Ensure GitHub CLI configuration directory exists
   ansible.builtin.file:
